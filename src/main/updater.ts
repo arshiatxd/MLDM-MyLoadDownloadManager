@@ -290,8 +290,16 @@ export class UpdateService {
       this.status.downloadedFilePath &&
       fs.existsSync(this.status.downloadedFilePath)
     ) {
-      await this.onLaunchInstaller?.(this.status.downloadedFilePath);
-      return this.getStatus();
+      try {
+        await this.onLaunchInstaller?.(this.status.downloadedFilePath);
+        return this.getStatus();
+      } catch (err) {
+        return this.setStatus({
+          ...this.status,
+          state: 'error',
+          error: err instanceof Error ? err.message : 'Failed to launch update installer',
+        });
+      }
     }
 
     if (!this.status.installerUrl) {

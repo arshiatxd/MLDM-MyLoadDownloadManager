@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +9,7 @@ import {
   clipboard,
   powerSaveBlocker,
   session,
+  shell,
 } from 'electron';
 import { isHttpUrl, isMagnetUri, isTorrentFilePath } from '../shared/constants';
 import type { PopupSessionData } from '../shared/types';
@@ -469,9 +469,13 @@ app.whenReady().then(() => {
     downloadDir: path.join(app.getPath('temp'), 'MyLoad-Updates'),
     onStatusChanged: (st) => sendToRenderer('myload:update-status', st),
     onLaunchInstaller: async (filePath) => {
-      const child = spawn(filePath, [], { detached: true, stdio: 'ignore' });
-      child.unref();
-      void performQuit();
+      const openErr = await shell.openPath(filePath);
+      if (openErr) {
+        throw new Error(`Unable to launch update installer: ${openErr}`);
+      }
+      setTimeout(() => {
+        void performQuit();
+      }, 250);
     },
   });
 

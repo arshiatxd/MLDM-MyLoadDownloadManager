@@ -170,5 +170,88 @@ describe('GitHub UpdateService & semver utilities', () => {
     expect(fs.existsSync(oldPart)).toBe(false);
     expect(fs.existsSync(unrelatedNote)).toBe(true);
   });
+
+  it('transitions cleanly to error if launching the downloaded installer fails or is declined', async () => {
+    const installerPayload = crypto.randomBytes(8192);
+    const server = http.createServer((req, res) => {
+      const urlPath = (req.url || '/').split('?')[0];
+      if (urlPath === '/releases/latest') {
+        const host = req.headers.host;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            tag_name: 'v1.2.0',
+            name: 'MyLoad v1.2.0',
+            html_url: `http://${host}/releases/tag/v1.2.0`,
+            assets: [
+              {
+                name: 'MyLoad-Installer-1.2.0-x64.exe',
+                browser_download_url: `http://${host}/MyLoad-Installer-1.2.0-x64.exe`,
+                size: installerPayload.length,
+              },
+            ],
+          })
+        );
+        return;
+      }
+      if (urlPath === '/MyLoad-Installer-1.2.0-x64.exe') {
+        res.statusCode = 200;
+        res.setHeader('Content-Length', String(installerPayload.length));
+        res.end(installerPayload);
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const updater = new UpdateService({
+      currentVersion: '1.0.0',
+      downloadDir: path.join(tmpDir, 'launch-err-updates'),
+      apiUrl: `${baseUrl}/releases/latest`,
+      fallbackReleaseUrl: `${baseUrl}/releases/latest`,
+      allowInsecureTestUrls: true,
+      onLaunchInstaller: async () => {
+        throw new Error('Unable to launch update installer: Access is denied');
+      },
+    });
+
+    const avail = await updater.checkForUpdates();
+    expect(avail.state).toBe('available');
+
+    const failed = await updater.downloadAndInstallUpdate();
+    expect(failed.state).toBe('error');
+    expect(failed.error).toContain('Unable to launch update installer');
+    expect(failed.downloadedFilePath).toBeTruthy();
+    expect(fs.existsSync(failed.downloadedFilePath!)).toBe(true);
+
+    const downloadedAgain = await updater.checkForUpdates();
+    expect(downloadedAgain.state).toBe('available');
+
+    let calls = 0;
+    const retryUpdater = new UpdateService({
+      currentVersion: '1.0.0',
+      downloadDir: path.join(tmpDir, 'retry-updates'),
+      apiUrl: `${baseUrl}/releases/latest`,
+      fallbackReleaseUrl: `${baseUrl}/releases/latest`,
+      allowInsecureTestUrls: true,
+      onLaunchInstaller: async () => {
+        calls += 1;
+        throw new Error('Cancelled by user');
+      },
+    });
+    await retryUpdater.checkForUpdates();
+    await retryUpdater.downloadAndInstallUpdate();
+
+    (retryUpdater as unknown as { status: UpdateStatus }).status.state = 'downloaded';
+    const retried = await retryUpdater.downloadAndInstallUpdate();
+    expect(calls).toBe(2);
+    expect(retried.state).toBe('error');
+    expect(retried.error).toBe('Cancelled by user');
+  });
 });
 

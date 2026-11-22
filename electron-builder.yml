@@ -1,0 +1,64 @@
+appId: com.myload.app
+productName: MyLoad Download Manager
+copyright: Copyright © 2026 arshiatxd & MyLoad Download Manager Contributors
+compression: maximum
+electronLanguages:
+  - en-US
+afterPack: scripts/after-pack.mjs
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - build/icon.png
+  - build/tray-icon.png
+  - build/icon.ico
+  - "!dist/**/*.map"
+  - "!node_modules/node-datachannel/**"
+  - "!node_modules/webrtc-polyfill/**"
+  - "!node_modules/web-streams-polyfill/**"
+  - "!node_modules/webtorrent/dist/**"
+  - "!node_modules/xml2js/lib/xml2js.bc.js"
+  - "!node_modules/**/*.map"
+  - "!node_modules/**/*.bare"
+  - "!node_modules/**/*.d.ts"
+  - "!node_modules/**/*.{cpp,cc,c,h,hpp,md,markdown,gyp,gypi}"
+  - "!node_modules/**/prebuilds/{darwin-*,linux-*,ios-*,android-*,win32-ia32,win32-arm64}/**"
+  - "!node_modules/**/{test,tests,__tests__,example,examples,docs,doc,deps,.github}/**"
+  - package.json
+asarUnpack:
+  - build/**
+  - "**/*.node"
+extraResources:
+  - from: extension
+    to: extension
+npmRebuild: false
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  include: build/installer.nsh
+  shortcutName: MyLoad Download Manager
+  uninstallDisplayName: MyLoad Download Manager 1.0.0
+  license: build/license.txt
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+  artifactName: MyLoad-Download-Manager-Installer-${version}-x64.${ext}
+portable:
+  artifactName: MyLoad-Download-Manager-Portable-${version}-${arch}.${ext}

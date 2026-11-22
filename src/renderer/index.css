@@ -1,0 +1,309 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="dark"] {
+  --bg-canvas: #121215;
+  --bg-surface: #1a1a1f;
+  --bg-elevated: #23232a;
+  --bg-hover: #2d2d37;
+  --bg-selected: rgba(200, 30, 61, 0.18);
+  --border-subtle: #2e2e38;
+  --border-strong: #464654;
+  --text-primary: #f5f5f9;
+  --text-secondary: #b4b4c2;
+  --text-muted: #868696;
+
+  --accent: #c81e3d;
+  --accent-hover: #de2849;
+  --accent-active: #a31530;
+  --accent-soft: rgba(200, 30, 61, 0.19);
+  --accent-text: #ff7a93;
+  --accent-contrast: #ffffff;
+
+  --success: #22c55e;
+  --success-soft: rgba(34, 197, 94, 0.16);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.16);
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.16);
+  --focus-ring: #ff6b86;
+}
+
+[data-theme="light"] {
+  --bg-canvas: #f4f4f7;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ececf1;
+  --bg-hover: #e2e2ea;
+  --bg-selected: rgba(169, 21, 50, 0.10);
+  --border-subtle: #d6d6e0;
+  --border-strong: #b8b8c6;
+  --text-primary: #17171c;
+  --text-secondary: #484856;
+  --text-muted: #6e6e7d;
+
+  --accent: #a91532;
+  --accent-hover: #c31b3c;
+  --accent-active: #890f27;
+  --accent-soft: rgba(169, 21, 50, 0.12);
+  --accent-text: #a91532;
+  --accent-contrast: #ffffff;
+
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.12);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.12);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.12);
+  --focus-ring: #a91532;
+}
+
+[data-theme="high-contrast"] {
+  --bg-canvas: #000000;
+  --bg-surface: #0a0a0d;
+  --bg-elevated: #17171c;
+  --bg-hover: #25252e;
+  --bg-selected: rgba(255, 51, 88, 0.25);
+  --border-subtle: #8f8fa3;
+  --border-strong: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #e5e5ef;
+  --text-muted: #c2c2d4;
+
+  --accent: #ff2e55;
+  --accent-hover: #ff5474;
+  --accent-active: #d91c40;
+  --accent-soft: rgba(255, 46, 85, 0.26);
+  --accent-text: #ff8ea3;
+  --accent-contrast: #ffffff;
+
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.22);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.22);
+  --danger: #ff5c5c;
+  --danger-soft: rgba(255, 92, 92, 0.24);
+  --focus-ring: #ffe066;
+}
+
+[data-font-scale="compact"] {
+  font-size: 14px;
+}
+
+[data-font-scale="default"] {
+  font-size: 15px;
+}
+
+[data-font-scale="large"] {
+  font-size: 17px;
+}
+
+@keyframes menuOpen {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes drawerIn {
+  from {
+    opacity: 0;
+    transform: translateX(36px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes inspectorIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tabContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes settingsTabIn {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-menu-open {
+  animation: menuOpen 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top center;
+}
+
+.animate-modal-in {
+  animation: modalIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-drawer-in {
+  animation: drawerIn 250ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-inspector-in {
+  animation: inspectorIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-tab-content {
+  animation: tabContentIn 230ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-row-enter {
+  animation: tabContentIn 230ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-settings-tab {
+  animation: settingsTabIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ml-input {
+  width: 100%;
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.625rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.35;
+  color: var(--text-primary);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ml-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.ml-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.ml-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ml-resize-handle {
+  position: relative;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+  transition: background-color 150ms ease;
+}
+
+.ml-resize-handle::before {
+  content: "";
+  width: 44px;
+  height: 3px;
+  border-radius: 9999px;
+  background-color: var(--border-strong);
+  opacity: 0.55;
+  transition: background-color 150ms ease, width 150ms ease, opacity 150ms ease;
+}
+
+.ml-resize-handle:hover::before,
+.ml-resize-handle[data-dragging="true"]::before {
+  width: 72px;
+  opacity: 1;
+  background-color: var(--accent);
+}
+
+[data-reduced-motion="true"] *,
+[data-reduced-motion="true"] *::before,
+[data-reduced-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  overflow: hidden;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

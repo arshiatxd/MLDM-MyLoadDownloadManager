@@ -6,6 +6,7 @@ import {
   FILE_CATEGORIES,
   createDefaultCategoryDirs,
   createDefaultSettings,
+  normalizeDownloadSchedule,
   normalizeHexColor,
 } from '../shared/constants';
 import type {
@@ -58,8 +59,11 @@ export function normalizeDownloadsOnLoad(
 
     let status = item.status;
     let errorMessage = item.errorMessage;
+    const schedule = normalizeDownloadSchedule(item.schedule);
     if (status === 'downloading' || status === 'probing' || status === 'queued') {
-      if (item.kind === 'media') {
+      if (schedule?.startAt && schedule.startAt > Date.now()) {
+        status = 'paused';
+      } else if (item.kind === 'media') {
         status = 'error';
         errorMessage = 'Interrupted when app closed — start again from the browser extension';
       } else {
@@ -73,6 +77,7 @@ export function normalizeDownloadsOnLoad(
       ...item,
       status,
       errorMessage,
+      schedule,
       downloadSpeed: 0,
       uploadSpeed: 0,
       etaSeconds: null,
@@ -127,6 +132,10 @@ export class StateStore {
             ? Boolean(rawSettings.useCompactDownloadPopup)
             : defaults.useCompactDownloadPopup,
         autoDownloadOnClick: Boolean(rawSettings.autoDownloadOnClick),
+        showScheduleInPopup:
+          rawSettings.showScheduleInPopup !== undefined
+            ? Boolean(rawSettings.showScheduleInPopup)
+            : defaults.showScheduleInPopup,
         queueMode:
           rawSettings.queueMode === 'sequential' || rawSettings.queueMode === 'parallel-equal'
             ? rawSettings.queueMode

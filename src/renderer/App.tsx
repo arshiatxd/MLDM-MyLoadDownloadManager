@@ -11,6 +11,7 @@ import type {
   CategoryId,
   CustomThemeColors,
   DownloadItem,
+  DownloadSchedule,
   PowerAction,
   QueueMode,
   SocialDownloadRequest,
@@ -28,6 +29,7 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { LogsDrawer } from './components/LogsDrawer';
 import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { RemoveConfirmModal } from './components/RemoveConfirmModal';
+import { ScheduleDownloadModal } from './components/ScheduleDownloadModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ShutdownCountdownModal } from './components/ShutdownCountdownModal';
 import { StatusBar } from './components/StatusBar';
@@ -61,6 +63,7 @@ export function App() {
     ids: string[];
     deleteFilesDefault: boolean;
   } | null>(null);
+  const [scheduleModalItem, setScheduleModalItem] = useState<DownloadItem | null>(null);
 
   const [dragOverlayVisible, setDragOverlayVisible] = useState(false);
   const dragDepthRef = useRef(0);
@@ -661,6 +664,7 @@ export function App() {
             void navigator.clipboard.writeText(src);
             announce('Source link copied to clipboard');
           }}
+          onOpenSchedule={(item) => setScheduleModalItem(item)}
           onOpenAddModal={() => {
             setAddModalRequest(undefined);
             setAddModalOpen(true);
@@ -760,6 +764,15 @@ export function App() {
             void window.myload.removeDownloads(removeModal.ids, deleteFiles);
             setRemoveModal(null);
           }
+        }}
+      />
+
+      <ScheduleDownloadModal
+        item={scheduleModalItem}
+        onClose={() => setScheduleModalItem(null)}
+        onSave={async (id, schedule: DownloadSchedule | null) => {
+          await window.myload.updateDownloadSchedule(id, schedule);
+          announce(schedule ? 'Download schedule updated' : 'Download schedule cleared');
         }}
       />
 

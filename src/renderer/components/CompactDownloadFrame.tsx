@@ -43,6 +43,12 @@ import { applyDocumentAppearance } from '../utils/theme';
 import { DirectoryStatusBanner } from './DirectoryStatusBanner';
 import { MultiPartPromptCard } from './MultiPartPromptCard';
 import { MyLoadLogo } from './MyLoadLogo';
+import {
+  ScheduleControlsCard,
+  type ScheduleControlsValue,
+  buildScheduleFromControls,
+  createInitialScheduleControls,
+} from './ScheduleControlsCard';
 
 interface CompactDownloadFrameProps {
   sessionId: string;
@@ -78,6 +84,9 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>('parallel');
   const [dontAskAgain, setDontAskAgain] = useState(false);
   const [socialRequest, setSocialRequest] = useState<SocialDownloadRequest | null>(null);
+  const [scheduleVal, setScheduleVal] = useState<ScheduleControlsValue>(() =>
+    createInitialScheduleControls()
+  );
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saveDirTouched, setSaveDirTouched] = useState(false);
@@ -106,6 +115,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
 
       setSession(ses);
       setMode(ses.mode);
+      setScheduleVal(createInitialScheduleControls());
 
       if (ses.mode === 'progress') {
         const ids =
@@ -311,8 +321,22 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     if (mode !== 'confirm') return;
     const hasTallSection =
       multiPartActive || torrentFiles.length > 0 || Boolean(dirValidation && (!dirValidation.valid || dirValidation.warning));
-    void window.myload.resizeCurrentWindow(560, hasTallSection ? 620 : 440);
-  }, [mode, multiPartActive, torrentFiles.length, dirValidation]);
+    const scheduleExtra = settings.showScheduleInPopup
+      ? scheduleVal.startMode === 'specific' || scheduleVal.stopEnabled
+        ? 120
+        : 92
+      : 0;
+    const targetHeight = Math.min(720, (hasTallSection ? 620 : 440) + scheduleExtra);
+    void window.myload.resizeCurrentWindow(560, targetHeight);
+  }, [
+    mode,
+    multiPartActive,
+    torrentFiles.length,
+    dirValidation,
+    settings.showScheduleInPopup,
+    scheduleVal.startMode,
+    scheduleVal.stopEnabled,
+  ]);
 
   const trackedItems = useMemo(
     () =>
@@ -377,6 +401,12 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         });
       }
 
+      const schedule = settings.showScheduleInPopup
+        ? buildScheduleFromControls(scheduleVal)
+        : undefined;
+      const deferredStart =
+        startPaused || Boolean(schedule?.startAt && schedule.startAt > Date.now());
+
       if (socialRequest) {
         const created = await window.myload.addSocialDownload({
           ...socialRequest,
@@ -384,8 +414,9 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
           fileName: isMultiSlideSocial ? undefined : fileName.trim() || undefined,
           startPaused,
           alwaysUseThisFolder: alwaysUseDir,
+          schedule,
         });
-        if (startPaused) {
+        if (deferredStart) {
           await window.myload.closeWindow();
           return;
         }
@@ -404,10 +435,11 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             startPaused,
             alwaysUseThisFolder: alwaysUseDir,
             requestHeaders,
+            schedule,
           })),
           batchQueueMode
         );
-        if (startPaused) {
+        if (deferredStart) {
           await window.myload.closeWindow();
           return;
         }
@@ -426,9 +458,10 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         alwaysUseThisFolder: alwaysUseDir,
         selectedFileIndices: torrentFiles.length > 0 ? selectedFileIndices : undefined,
         requestHeaders,
+        schedule,
       });
 
-      if (startPaused) {
+      if (deferredStart) {
         await window.myload.closeWindow();
         return;
       }
@@ -683,6 +716,14 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
               </strong>
             </span>
           </div>
+
+          {settings.showScheduleInPopup && (
+            <ScheduleControlsCard
+              compact
+              value={scheduleVal}
+              onChange={setScheduleVal}
+            />
+          )}
 
           {errorMsg && (
             <div className="flex items-center gap-1.5 text-xs text-[var(--danger)]">

@@ -6,9 +6,11 @@ import {
   createDefaultSettings,
   deriveNameFromSource,
   extractDownloadableSources,
+  formatScheduleSummary,
   isHttpUrl,
   isMagnetUri,
   isTorrentFilePath,
+  normalizeDownloadSchedule,
   resolveSaveDirForFile,
   sanitizeFileName,
   speedToBytesPerSec,
@@ -23,6 +25,7 @@ import type {
   DiskSpaceInfo,
   DownloadItem,
   DownloadKind,
+  DownloadSchedule,
   GlobalStats,
   LogEntry,
   MultiPartScanResult,
@@ -54,6 +57,30 @@ import {
   normalizeTorrentSource,
   probeTorrentSource,
 } from './torrent-engine';
+
+function prepareScheduleForAdd(
+  rawSchedule: DownloadSchedule | undefined,
+  startPaused: boolean,
+  now = Date.now()
+): { schedule?: DownloadSchedule; initialPaused: boolean } {
+  const norm = normalizeDownloadSchedule(rawSchedule);
+  if (!norm) {
+    return { schedule: undefined, initialPaused: startPaused };
+  }
+  const startAt = norm.startAt && norm.startAt > now ? norm.startAt : null;
+  const stopAt = norm.stopAt && norm.stopAt > now ? norm.stopAt : null;
+  const cleaned =
+    startAt || stopAt
+      ? {
+          ...(startAt ? { startAt } : {}),
+          ...(stopAt ? { stopAt } : {}),
+        }
+      : undefined;
+  return {
+    schedule: cleaned,
+    initialPaused: startPaused || Boolean(cleaned?.startAt && cleaned.startAt > now),
+  };
+}
 
 export interface ManagerCallbacks {
   onDownloadsUpdated?: (downloads: DownloadItem[]) => void;
@@ -93,6 +120,7 @@ export class DownloadManager {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private clipboardTimer: ReturnType<typeof setInterval> | null = null;
+  private scheduleTimer: ReturnType<typeof setInterval> | null = null;
   private lastClipboardValue = '';
   private lastCopiedDownloadable: string | null = null;
   private lastConsumedDownloadable: string | null = null;
@@ -167,8 +195,12 @@ export class DownloadManager {
   start(): void {
     this.logger.info('App', 'MyLoad download manager started');
     this.statsTimer = setInterval(() => this.broadcastStats(), 750);
+    this.scheduleTimer = setInterval(() => {
+      void this.processSchedules();
+    }, 1000);
     this.syncClipboardWatcher();
     void this.syncBridge();
+    void this.processSchedules();
     this.scheduleQueue();
     this.broadcastStats();
   }
@@ -293,9 +325,14 @@ export class DownloadManager {
       };
     }
 
+    const { schedule, initialPaused } = prepareScheduleForAdd(
+      req.schedule,
+      Boolean(req.startPaused)
+    );
+
     const dirCheck = await validateSaveDirectory(
       requestedSaveDir,
-      req.startPaused ? null : totalBytes
+      initialPaused ? null : totalBytes
     );
     if (!dirCheck.valid) {
       throw new Error(dirCheck.error || 'Invalid download folder');
@@ -324,7 +361,7 @@ export class DownloadManager {
       saveDir,
       filePath: path.join(saveDir, baseName),
       category: classifyFileName(baseName, kind),
-      status: req.startPaused ? 'paused' : 'queued',
+      status: initialPaused ? 'paused' : 'queued',
       totalBytes,
       downloadedBytes: 0,
       uploadedBytes: 0,
@@ -337,6 +374,7 @@ export class DownloadManager {
       requestHeaders: req.requestHeaders,
       addedAt: Date.now(),
       retryCount: 0,
+      schedule,
     };
 
     if (req.duplicateOverride) {
@@ -344,10 +382,15 @@ export class DownloadManager {
     }
 
     this.downloads.unshift(item);
-    this.logger.info('Queue', `Added ${item.name} (${kind.toUpperCase()})`, item.id);
+    const schedNote = formatScheduleSummary(schedule);
+    this.logger.info(
+      'Queue',
+      `Added ${item.name} (${kind.toUpperCase()})${schedNote ? ` (${schedNote})` : ''}`,
+      item.id
+    );
     this.emitAndSaveImmediate();
 
-    if (!req.startPaused) {
+    if (!initialPaused) {
       this.scheduleQueue();
     }
 
@@ -420,12 +463,110 @@ export class DownloadManager {
       return;
     }
 
+    if (item.schedule?.startAt) {
+      item.schedule = item.schedule.stopAt ? { stopAt: item.schedule.stopAt } : undefined;
+    }
+
     item.status = 'queued';
     item.errorMessage = undefined;
     this.logger.info('Queue', `Queued ${item.name} for resume`, item.id);
     this.emitAndSaveImmediate();
     this.scheduleQueue();
     this.broadcastStats();
+  }
+
+  async updateDownloadSchedule(
+    id: string,
+    rawSchedule: DownloadSchedule | null
+  ): Promise<DownloadItem | null> {
+    const item = this.findItem(id);
+    if (!item || item.status === 'completed') return null;
+
+    const nextSchedule = normalizeDownloadSchedule(rawSchedule);
+    if (nextSchedule?.startAt && nextSchedule.startAt > Date.now()) {
+      if (
+        item.status === 'downloading' ||
+        item.status === 'probing' ||
+        item.status === 'queued' ||
+        item.status === 'seeding'
+      ) {
+        await this.pauseDownload(item.id);
+      }
+    }
+
+    item.schedule = nextSchedule;
+    const summary = formatScheduleSummary(nextSchedule);
+    this.logger.info(
+      'Schedule',
+      summary
+        ? `Updated schedule for ${item.name}: ${summary}`
+        : `Cleared schedule for ${item.name}`,
+      item.id
+    );
+    this.emitAndSaveImmediate();
+    await this.processSchedules();
+    const updated = this.findItem(id);
+    return updated ? { ...updated, requestHeaders: undefined } : null;
+  }
+
+  async processSchedules(now = Date.now()): Promise<void> {
+    if (this.shuttingDown) return;
+
+    let changed = false;
+    let shouldQueue = false;
+
+    for (const item of [...this.downloads]) {
+      if (item.status === 'completed' || !item.schedule) continue;
+
+      if (item.schedule.startAt && now >= item.schedule.startAt) {
+        const remainingStop = item.schedule.stopAt ?? null;
+        if (remainingStop && now >= remainingStop) {
+          item.schedule = undefined;
+          changed = true;
+          this.logger.info(
+            'Schedule',
+            `Schedule window elapsed without starting for ${item.name}`,
+            item.id
+          );
+          continue;
+        }
+
+        item.schedule = remainingStop ? { stopAt: remainingStop } : undefined;
+        changed = true;
+        if (item.status === 'paused' || item.status === 'error') {
+          item.status = 'queued';
+          item.errorMessage = undefined;
+          shouldQueue = true;
+          this.logger.info('Schedule', `Scheduled start reached for ${item.name}`, item.id);
+        }
+      }
+
+      if (item.schedule?.stopAt && now >= item.schedule.stopAt) {
+        const remainingStart = item.schedule.startAt ?? null;
+        item.schedule = remainingStart ? { startAt: remainingStart } : undefined;
+        changed = true;
+        if (
+          item.status === 'downloading' ||
+          item.status === 'probing' ||
+          item.status === 'queued' ||
+          item.status === 'seeding'
+        ) {
+          this.logger.info(
+            'Schedule',
+            `Scheduled stop reached — pausing ${item.name}`,
+            item.id
+          );
+          await this.pauseDownload(item.id);
+        }
+      }
+    }
+
+    if (changed) {
+      this.emitAndSaveImmediate();
+    }
+    if (shouldQueue) {
+      this.scheduleQueue();
+    }
   }
 
   async retryDownload(id: string): Promise<void> {
@@ -606,6 +747,7 @@ export class DownloadManager {
 
     if (this.statsTimer) clearInterval(this.statsTimer);
     if (this.clipboardTimer) clearInterval(this.clipboardTimer);
+    if (this.scheduleTimer) clearInterval(this.scheduleTimer);
     if (this.emitTimer) clearTimeout(this.emitTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
 
@@ -1036,6 +1178,7 @@ export class DownloadManager {
           startPaused,
           alwaysUseThisFolder: !appliedFolderDefault ? Boolean(req.alwaysUseThisFolder) : false,
           requestHeaders: { Referer: referer },
+          schedule: req.schedule,
         });
         appliedFolderDefault = true;
         created.push(item);
@@ -1090,7 +1233,10 @@ export class DownloadManager {
     }
     this.recordRecentDir(dirCheck.normalizedPath);
 
-    const startPaused = Boolean(req.startPaused);
+    const { schedule, initialPaused } = prepareScheduleForAdd(
+      req.schedule,
+      Boolean(req.startPaused)
+    );
     const item: DownloadItem = {
       id: crypto.randomUUID(),
       kind: 'media',
@@ -1099,7 +1245,7 @@ export class DownloadManager {
       saveDir: dirCheck.normalizedPath,
       filePath: path.join(dirCheck.normalizedPath, sanitizeFileName(displayName)),
       category: classifyFileName(displayName, 'http'),
-      status: startPaused ? 'paused' : 'queued',
+      status: initialPaused ? 'paused' : 'queued',
       totalBytes: null,
       downloadedBytes: 0,
       uploadedBytes: 0,
@@ -1110,17 +1256,19 @@ export class DownloadManager {
       segments: [],
       addedAt: Date.now(),
       retryCount: 0,
+      schedule,
     };
 
     this.pendingMediaJobs.set(item.id, req);
     this.downloads.unshift(item);
+    const schedNote = formatScheduleSummary(schedule);
     this.logger.info(
       'Media',
-      `${startPaused ? 'Added paused' : 'Queued'} ${req.platform} media: ${item.name}`,
+      `${initialPaused ? 'Added paused' : 'Queued'} ${req.platform} media: ${item.name}${schedNote ? ` (${schedNote})` : ''}`,
       item.id
     );
     this.emitAndSaveImmediate();
-    if (!startPaused) {
+    if (!initialPaused) {
       this.scheduleQueue();
     }
     return item;

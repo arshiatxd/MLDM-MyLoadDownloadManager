@@ -233,6 +233,15 @@ export function GeneralSettingsTab({
             />
             <span>Show download confirmation box for manual &amp; dropped links</span>
           </label>
+          <label className="flex cursor-pointer items-center gap-2.5 text-[var(--text-primary)]">
+            <input
+              type="checkbox"
+              checked={settings.showScheduleInPopup}
+              onChange={(e) => onUpdate({ showScheduleInPopup: e.target.checked })}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            <span>Show schedule options (start &amp; stop time) in download popup</span>
+          </label>
         </div>
       </section>
 

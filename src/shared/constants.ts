@@ -5,6 +5,7 @@ import type {
   CategoryId,
   CustomThemeColors,
   DownloadKind,
+  DownloadSchedule,
   FileCategory,
   NetworkBalanceStats,
   PowerAction,
@@ -149,6 +150,7 @@ export function createDefaultSettings(defaultDownloadDir: string): AppSettings {
     gamingModeProfile: 'surfing',
     useCompactDownloadPopup: true,
     autoDownloadOnClick: false,
+    showScheduleInPopup: true,
     queueMode: 'parallel',
     detectMultiPartEnabled: true,
     multiPartDontAskAgain: false,
@@ -533,5 +535,103 @@ export function formatSocialRequestSummary(req: SocialDownloadRequest): string {
     parts.push(`${req.items.length} items`);
   }
   return parts.join(' · ');
+}
+
+export function normalizeDownloadSchedule(
+  schedule?: DownloadSchedule | null
+): DownloadSchedule | undefined {
+  if (!schedule || typeof schedule !== 'object') return undefined;
+  const startAt =
+    typeof schedule.startAt === 'number' &&
+    Number.isFinite(schedule.startAt) &&
+    schedule.startAt > 0
+      ? Math.round(schedule.startAt)
+      : null;
+  const stopAt =
+    typeof schedule.stopAt === 'number' &&
+    Number.isFinite(schedule.stopAt) &&
+    schedule.stopAt > 0
+      ? Math.round(schedule.stopAt)
+      : null;
+  if (!startAt && !stopAt) return undefined;
+  return {
+    ...(startAt ? { startAt } : {}),
+    ...(stopAt ? { stopAt } : {}),
+  };
+}
+
+export function resolveScheduledTimestamp(
+  timeHHMM: string,
+  referenceNow = Date.now(),
+  minAfterMs?: number
+): number | null {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((timeHHMM || '').trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const floor = Math.max(referenceNow, minAfterMs ?? referenceNow);
+  const d = new Date(referenceNow);
+  d.setHours(hours, minutes, 0, 0);
+  while (d.getTime() <= floor) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d.getTime();
+}
+
+export function formatTimestampToTimeInput(ts: number | null | undefined): string {
+  if (!ts || !Number.isFinite(ts) || ts <= 0) return '';
+  const d = new Date(ts);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+export function formatScheduleTimeShort(ts: number, now = Date.now()): string {
+  const target = new Date(ts);
+  const ref = new Date(now);
+  const timeStr = formatTimestampToTimeInput(ts);
+  const startOfToday = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+  const startOfTarget = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  const dayDiff = Math.round((startOfTarget - startOfToday) / 86400000);
+  if (dayDiff === 0) return timeStr;
+  if (dayDiff === 1) return `Tomorrow ${timeStr}`;
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return `${months[target.getMonth()]} ${target.getDate()} ${timeStr}`;
+}
+
+export function formatScheduleSummary(
+  schedule?: DownloadSchedule | null,
+  now = Date.now()
+): string | null {
+  const clean = normalizeDownloadSchedule(schedule);
+  if (!clean) return null;
+  const parts: string[] = [];
+  if (clean.startAt) {
+    parts.push(`Starts ${formatScheduleTimeShort(clean.startAt, now)}`);
+  }
+  if (clean.stopAt) {
+    parts.push(`Stops ${formatScheduleTimeShort(clean.stopAt, now)}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+export function getDefaultScheduleTimeString(offsetHours: number, baseMs = Date.now()): string {
+  const d = new Date(baseMs);
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + Math.max(1, Math.round(offsetHours)));
+  return formatTimestampToTimeInput(d.getTime());
 }
 

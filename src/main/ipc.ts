@@ -11,6 +11,7 @@ import { extractMultipleSources } from '../shared/constants';
 import type {
   AddDownloadRequest,
   AppSettings,
+  DownloadSchedule,
   PopupSessionData,
   QueueMode,
   SocialDownloadRequest,
@@ -108,6 +109,11 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:resume-all', () => manager.resumeAll());
   ipcMain.handle('myload:update-torrent-files', (_e, id: string, selectedIndices: number[]) =>
     manager.updateTorrentFiles(id, selectedIndices)
+  );
+  ipcMain.handle(
+    'myload:update-download-schedule',
+    (_e, id: string, schedule: DownloadSchedule | null) =>
+      manager.updateDownloadSchedule(id, schedule)
   );
   ipcMain.handle('myload:update-settings', (_e, patch: Partial<AppSettings>) =>
     manager.updateSettings(patch)

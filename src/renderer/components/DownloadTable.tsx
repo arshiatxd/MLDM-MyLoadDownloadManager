@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   Archive,
+  Clock,
   Copy,
   DownloadCloud,
   ExternalLink,
@@ -22,6 +23,7 @@ import {
   formatBytes,
   formatDateShort,
   formatEta,
+  formatScheduleSummary,
   formatSpeed,
 } from '../../shared/constants';
 import { t } from '../../shared/i18n';
@@ -45,6 +47,7 @@ interface DownloadTableProps {
   onShowInFolder: (item: DownloadItem) => void;
   onRequestRemove: (ids: string[], deleteFilesDefault?: boolean) => void;
   onCopySource: (source: string) => void;
+  onOpenSchedule: (item: DownloadItem) => void;
   onOpenAddModal: () => void;
 }
 
@@ -81,6 +84,9 @@ function getStatusBadge(item: DownloadItem): { label: string; colorVar: string }
     case 'seeding':
       return { label: 'Seeding', colorVar: 'var(--success)' };
     case 'paused':
+      if (item.schedule?.startAt && item.schedule.startAt > Date.now()) {
+        return { label: 'Scheduled', colorVar: 'var(--accent)' };
+      }
       return { label: pct > 0 ? `Paused ${pct}%` : 'Paused', colorVar: 'var(--warning)' };
     case 'completed':
       return { label: 'Completed', colorVar: 'var(--success)' };
@@ -128,6 +134,8 @@ const DownloadRow = memo(function DownloadRow({
     item.status === 'probing' ||
     item.status === 'queued' ||
     item.status === 'seeding';
+  const scheduleLabel =
+    item.status !== 'completed' ? formatScheduleSummary(item.schedule) : null;
 
   return (
     <tr
@@ -177,6 +185,14 @@ const DownloadRow = memo(function DownloadRow({
             {item.status === 'error' && item.errorMessage ? (
               <div className="truncate text-[12px] text-[var(--danger)]" title={item.errorMessage}>
                 {item.errorMessage}
+              </div>
+            ) : scheduleLabel ? (
+              <div
+                className="flex items-center gap-1 truncate text-[11.5px] text-[var(--accent-text)]"
+                title={scheduleLabel}
+              >
+                <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{scheduleLabel}</span>
               </div>
             ) : item.kind === 'torrent' && (item.status === 'downloading' || item.status === 'seeding') ? (
               <div className="truncate text-[12px] text-[var(--text-secondary)]">
@@ -346,6 +362,7 @@ export function DownloadTable({
   onShowInFolder,
   onRequestRemove,
   onCopySource,
+  onOpenSchedule,
   onOpenAddModal,
 }: DownloadTableProps) {
   const [contextMenu, setContextMenu] = useState<{
@@ -386,7 +403,7 @@ export function DownloadTable({
 
   const openContextMenuAt = (item: DownloadItem, clientX: number, clientY: number) => {
     const menuWidth = 216;
-    const menuHeight = 290;
+    const menuHeight = 330;
     const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8));
     const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8));
     setContextMenu({ item, x, y });
@@ -657,6 +674,26 @@ export function DownloadTable({
             <Copy className="h-4 w-4 text-[var(--text-secondary)]" />
             <span>Copy source link</span>
           </button>
+
+          {menuItem.status !== 'completed' && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const target = menuItem;
+                setContextMenu(null);
+                onOpenSchedule(target);
+              }}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+            >
+              <Clock className="h-4 w-4 text-[var(--accent-text)]" />
+              <span>
+                {menuItem.schedule?.startAt || menuItem.schedule?.stopAt
+                  ? 'Edit schedule...'
+                  : 'Schedule download...'}
+              </span>
+            </button>
+          )}
 
           <div className="my-1 h-px bg-[var(--border-subtle)]" />
 

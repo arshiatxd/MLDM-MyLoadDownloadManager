@@ -61,6 +61,11 @@ export interface SocialScanResult {
   error?: string;
 }
 
+export interface DownloadSchedule {
+  startAt?: number | null;
+  stopAt?: number | null;
+}
+
 export interface SocialDownloadRequest {
   platform: SocialPlatform;
   url: string;
@@ -73,6 +78,7 @@ export interface SocialDownloadRequest {
   fileName?: string;
   startPaused?: boolean;
   alwaysUseThisFolder?: boolean;
+  schedule?: DownloadSchedule;
 }
 
 export type DownloadStatus =
@@ -148,6 +154,7 @@ export interface DownloadItem {
   addedAt: number;
   completedAt?: number;
   retryCount: number;
+  schedule?: DownloadSchedule;
 }
 
 export type SpeedUnit = 'KB/s' | 'MB/s';
@@ -218,6 +225,7 @@ export interface AppSettings {
   folderRoutingMode: FolderRoutingMode;
   categoryDownloadDirs: CategoryDownloadDirs;
   showConfirmationDialog: boolean;
+  showScheduleInPopup: boolean;
   recentDirs: string[];
 
   downloadSpeedLimitEnabled: boolean;
@@ -287,6 +295,7 @@ export interface AddDownloadRequest {
   selectedFileIndices?: number[];
   duplicateOverride?: 'auto-rename' | 'overwrite';
   requestHeaders?: Record<string, string>;
+  schedule?: DownloadSchedule;
 }
 
 export interface BrowserInterceptPayload {
@@ -423,6 +432,7 @@ export interface MyLoadApi {
   pauseAll: () => Promise<void>;
   resumeAll: () => Promise<void>;
   updateTorrentFiles: (id: string, selectedIndices: number[]) => Promise<void>;
+  updateDownloadSchedule: (id: string, schedule: DownloadSchedule | null) => Promise<DownloadItem | null>;
   updateSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
   resetSettings: () => Promise<AppSettings>;
   clearLogs: () => Promise<void>;

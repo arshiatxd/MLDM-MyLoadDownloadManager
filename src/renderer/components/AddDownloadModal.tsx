@@ -35,6 +35,12 @@ import type {
 import { CustomSelect } from './CustomSelect';
 import { DirectoryStatusBanner } from './DirectoryStatusBanner';
 import { MultiPartPromptCard, buildQueueModeOptions } from './MultiPartPromptCard';
+import {
+  ScheduleControlsCard,
+  type ScheduleControlsValue,
+  buildScheduleFromControls,
+  createInitialScheduleControls,
+} from './ScheduleControlsCard';
 
 export interface AddDownloadInitialRequest {
   source?: string;
@@ -90,6 +96,9 @@ export function AddDownloadModal({
   const [selectedPartUrls, setSelectedPartUrls] = useState<string[]>([]);
   const [downloadAllParts, setDownloadAllParts] = useState(true);
   const [dontAskAgain, setDontAskAgain] = useState(false);
+  const [scheduleVal, setScheduleVal] = useState<ScheduleControlsValue>(() =>
+    createInitialScheduleControls()
+  );
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [autoFilledFromClipboard, setAutoFilledFromClipboard] = useState(false);
@@ -118,6 +127,7 @@ export function AddDownloadModal({
     setSelectedPartUrls([]);
     setDownloadAllParts(true);
     setDontAskAgain(false);
+    setScheduleVal(createInitialScheduleControls());
     setSubmitting(false);
     setSubmitError(null);
     setAutoFilledFromClipboard(false);
@@ -425,6 +435,10 @@ export function AddDownloadModal({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      const schedule = settings.showScheduleInPopup
+        ? buildScheduleFromControls(scheduleVal)
+        : undefined;
+
       if (socialRequest && onConfirmSocial) {
         await onConfirmSocial({
           ...socialRequest,
@@ -432,6 +446,7 @@ export function AddDownloadModal({
           fileName: isMultiSlideSocial ? undefined : fileName.trim() || undefined,
           startPaused,
           alwaysUseThisFolder: alwaysUseDir,
+          schedule,
         });
         onClose();
         return;
@@ -446,6 +461,7 @@ export function AddDownloadModal({
             saveDir: batchSaveDir,
             startPaused,
             alwaysUseThisFolder: alwaysUseDir,
+            schedule,
           })),
           batchQueueMode
         );
@@ -469,6 +485,7 @@ export function AddDownloadModal({
             startPaused,
             alwaysUseThisFolder: alwaysUseDir,
             requestHeaders,
+            schedule,
           })),
           batchQueueMode
         );
@@ -489,6 +506,7 @@ export function AddDownloadModal({
             ? duplicateChoice
             : undefined,
         requestHeaders,
+        schedule,
       });
       onClose();
     } catch (err) {
@@ -862,6 +880,10 @@ export function AddDownloadModal({
               </span>
             )}
           </div>
+
+          {settings.showScheduleInPopup && (
+            <ScheduleControlsCard value={scheduleVal} onChange={setScheduleVal} />
+          )}
 
           {submitError && (
             <div

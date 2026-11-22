@@ -4,6 +4,7 @@ import type {
   AppSettings,
   BrowserInterceptPayload,
   DownloadItem,
+  DownloadSchedule,
   GlobalStats,
   LogEntry,
   MyLoadApi,
@@ -58,6 +59,8 @@ const api: MyLoadApi = {
   resumeAll: () => ipcRenderer.invoke('myload:resume-all'),
   updateTorrentFiles: (id: string, selectedIndices: number[]) =>
     ipcRenderer.invoke('myload:update-torrent-files', id, selectedIndices),
+  updateDownloadSchedule: (id: string, schedule: DownloadSchedule | null) =>
+    ipcRenderer.invoke('myload:update-download-schedule', id, schedule),
   updateSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.invoke('myload:update-settings', patch),
   resetSettings: () => ipcRenderer.invoke('myload:reset-settings'),

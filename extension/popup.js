@@ -561,6 +561,17 @@ mediaUrlInput.addEventListener('keydown', (e) => {
 
 useTabBtn.addEventListener('click', async () => {
   if (activeTab === 'home') return;
+  let pasted = '';
+  try {
+    pasted = (await navigator.clipboard.readText()).trim();
+  } catch {
+    pasted = '';
+  }
+  if (pasted) {
+    platformStates[activeTab].url = pasted;
+    renderMediaTab();
+    return;
+  }
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && typeof tab.url === 'string') {

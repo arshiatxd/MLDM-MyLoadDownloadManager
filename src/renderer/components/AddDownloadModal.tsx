@@ -41,6 +41,7 @@ import {
   buildScheduleFromControls,
   createInitialScheduleControls,
 } from './ScheduleControlsCard';
+import { TorrentFileTree } from './TorrentFileTree';
 
 export interface AddDownloadInitialRequest {
   source?: string;
@@ -525,7 +526,11 @@ export function AddDownloadModal({
       aria-modal="true"
       aria-labelledby="add-download-title"
     >
-      <div className="animate-modal-in flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)] shadow-2xl">
+      <div
+        className={`animate-modal-in flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)] shadow-2xl ${
+          torrentFiles.length > 0 ? 'max-w-xl' : 'max-w-lg'
+        }`}
+      >
         <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-3.5">
           <h2 id="add-download-title" className="text-base font-semibold text-[var(--text-primary)]">
             {t(settings.language, 'newDownload')}
@@ -798,61 +803,11 @@ export function AddDownloadModal({
           )}
 
           {torrentFiles.length > 0 && (
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/70 p-2.5">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="font-medium text-[var(--text-primary)]">
-                  Files in torrent ({selectedFileIndices.length}/{torrentFiles.length} selected)
-                </span>
-                <div className="flex items-center gap-2 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFileIndices(torrentFiles.map((f) => f.index))}
-                    className="text-[var(--accent-text)] hover:underline"
-                  >
-                    Select all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFileIndices([])}
-                    className="text-[var(--text-secondary)] hover:underline"
-                  >
-                    None
-                  </button>
-                </div>
-              </div>
-              <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
-                {torrentFiles.map((file) => {
-                  const checked = selectedFileIndices.includes(file.index);
-                  return (
-                    <label
-                      key={file.index}
-                      className="flex cursor-pointer items-center justify-between gap-2 rounded px-1.5 py-1 hover:bg-[var(--bg-hover)]/50"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setSelectedFileIndices((prev) =>
-                              prev.includes(file.index)
-                                ? prev.filter((i) => i !== file.index)
-                                : [...prev, file.index]
-                            );
-                          }}
-                          className="h-3.5 w-3.5 accent-[var(--accent)]"
-                        />
-                        <span className="truncate text-[var(--text-primary)]" title={file.path}>
-                          {file.path}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">
-                        {formatBytes(file.length)}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
+            <TorrentFileTree
+              files={torrentFiles}
+              selectedIndices={selectedFileIndices}
+              onChangeSelection={setSelectedFileIndices}
+            />
           )}
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">

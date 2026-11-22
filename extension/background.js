@@ -1,3 +1,6 @@
+const BRIDGE_PORTS = [49173, 49174, 49175, 49176, 49177, 49178, 49179, 49180, 49181, 49182];
+const NATIVE_HOST_NAME = 'com.myload.host';
+
 const DEFAULT_SETTINGS = {
   enabled: true,
   port: 49173,
@@ -137,6 +140,58 @@ async function collectRelatedPartsFromTab(tabId, targetUrl, fileName) {
   }
 }
 
+async function probeBridgePort(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 550);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/health`, {
+      headers: { 'X-MyLoad-Client': 'myload-extension' },
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverBridgePort(preferredPort) {
+  const candidates = [preferredPort, ...BRIDGE_PORTS.filter((p) => p !== preferredPort)];
+  if (await probeBridgePort(candidates[0])) {
+    return candidates[0];
+  }
+  const rest = candidates.slice(1);
+  const results = await Promise.all(
+    rest.map(async (p) => ((await probeBridgePort(p)) ? p : null))
+  );
+  const found = results.find((p) => p !== null) ?? null;
+  if (found !== null) {
+    await chrome.storage.local.set({ port: found }).catch(() => {});
+  }
+  return found;
+}
+
+async function wakeNativeApp(preferredPort, focusMain = false) {
+  if (!chrome.runtime?.sendNativeMessage) {
+    return null;
+  }
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: 'ensure-running',
+      preferredPort,
+      focusMain,
+    });
+    if (response && response.ok && typeof response.port === 'number') {
+      await chrome.storage.local.set({ port: response.port }).catch(() => {});
+      return response.port;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function sendToBridge(port, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2500);
@@ -150,14 +205,33 @@ async function sendToBridge(port, payload) {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    if (!res.ok) return false;
+    if (!res.ok) return { sent: false, reachable: true };
     const data = await res.json().catch(() => null);
-    return Boolean(data && data.ok);
+    return { sent: Boolean(data && data.ok), reachable: true };
   } catch {
-    return false;
+    return { sent: false, reachable: false };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function sendWithAutoLaunch(port, payload) {
+  const direct = await sendToBridge(port, payload);
+  if (direct.sent) return true;
+  if (direct.reachable) return false;
+
+  const discovered = await discoverBridgePort(port);
+  if (discovered !== null && discovered !== port) {
+    const viaDiscovered = await sendToBridge(discovered, payload);
+    if (viaDiscovered.sent) return true;
+    if (viaDiscovered.reachable) return false;
+  }
+
+  const wokenPort = await wakeNativeApp(port, false);
+  if (wokenPort === null) return false;
+
+  const viaWoken = await sendToBridge(wokenPort, payload);
+  return viaWoken.sent;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -185,7 +259,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       getCookieHeader(targetUrl),
       isHttpOrHttps(targetUrl) ? collectRelatedPartsFromTab(tab && typeof tab.id === 'number' ? tab.id : undefined, targetUrl) : Promise.resolve(undefined),
     ]);
-    await sendToBridge(settings.port, {
+    await sendWithAutoLaunch(settings.port, {
       url: targetUrl,
       referrer: info.pageUrl || undefined,
       cookie,
@@ -245,7 +319,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         getCookieHeader(targetUrl),
         collectRelatedPartsFromTab(undefined, targetUrl, item.filename),
       ]);
-      const ok = await sendToBridge(settings.port, {
+      const ok = await sendWithAutoLaunch(settings.port, {
         url: targetUrl,
         fileName: item.filename || undefined,
         referrer: item.referrer || undefined,

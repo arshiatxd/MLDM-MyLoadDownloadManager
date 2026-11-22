@@ -36,15 +36,23 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 
 ### Windows Installer Wizard (Recommended)
 
-Download the latest `MyLoad-Download-Manager-Installer-1.0.12-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle and automatic startup configuration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.12-x64.exe`) is also produced by `npm run dist`.
+Download the latest `MyLoad-Download-Manager-Installer-1.0.13-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.13-x64.exe`) is also produced by `npm run dist`.
 
-### Companion Browser Extension (Chrome / Edge / Brave)
+### Browser Extension & Localhost Bridge Guide
 
-MyLoad Download Manager includes a Manifest V3 Chromium extension under [`extension/`](extension/) that forwards browser download clicks and right-click context actions over local loopback (`127.0.0.1:49173`):
+MyLoad Download Manager includes a Manifest V3 Chromium extension under [`extension/`](extension/) that forwards browser downloads, right-click **"Download with MyLoad"** actions, and media scans automatically over local loopback (`127.0.0.1`, ports `49173–49182`):
 
-1. Open **Settings → General & Folders → Browser Integration** inside MyLoad Download Manager and click **Open Extension Folder** (or use this repository's `extension/` directory).
+1. Open **Settings → General & Folders → Browser Integration** inside MyLoad Download Manager and click **Open Extension Folder** (or select this repository's `extension/` directory).
 2. Open `chrome://extensions` or `edge://extensions` in your browser and enable **Developer mode**.
 3. Click **Load unpacked** and select the `extension` folder.
+
+#### How Automatic Bridge & Auto-Launch Work
+- **Zero manual port setup:** MyLoad automatically binds `127.0.0.1:49173` (falling back through `49174–49182` if busy), and the browser extension discovers the live port automatically.
+- **Auto-launch when closed:** Installing or launching MyLoad registers the `com.myload.host` Native Messaging host (`%LOCALAPPDATA%\MyLoad\native-host\com.myload.host.json`). When MyLoad is completely closed and you click a download link or choose **Download with MyLoad**, the extension wakes MyLoad in the background and opens the confirmation popup directly in front of your browser.
+
+#### Troubleshooting (Manual Setup if Needed)
+- If the extension popup shows **MyLoad offline** even while MyLoad is running, verify **Settings → General & Folders → Enable local browser extension bridge** is checked and matches the port inside the extension's **Advanced bridge port** section (`49173` by default).
+- After updating extension files, click the **Reload** icon on `chrome://extensions` / `edge://extensions` so the updated extension ID (`cbnkknogojpgeikfeaploefenabcgiai`) and `nativeMessaging` permission take effect.
 
 ---
 

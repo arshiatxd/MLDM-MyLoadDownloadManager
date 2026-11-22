@@ -32,3 +32,14 @@ await esbuild.build({
   logLevel: 'info',
 });
 
+await esbuild.build({
+  entryPoints: ['src/main/native-host-cli.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'cjs',
+  outfile: 'dist/main/native-host.cjs',
+  sourcemap: false,
+  logLevel: 'info',
+});
+

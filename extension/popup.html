@@ -110,10 +110,16 @@
             ></textarea>
           </label>
 
-          <label class="field">
-            <span>Local bridge port</span>
-            <input id="port-input" type="number" min="1024" max="65535" />
-          </label>
+          <details class="advanced-bridge">
+            <summary>Advanced bridge port (auto-configured)</summary>
+            <label class="field">
+              <span>Local bridge port (auto-scans 49173–49182)</span>
+              <input id="port-input" type="number" min="1024" max="65535" />
+            </label>
+            <p class="field-note">
+              MyLoad discovers active ports and launches automatically when a download starts.
+            </p>
+          </details>
 
           <div id="save-hint" class="save-hint" aria-live="polite"></div>
         </section>

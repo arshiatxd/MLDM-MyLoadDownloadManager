@@ -15,6 +15,7 @@ import { isHttpUrl, isMagnetUri, isTorrentFilePath } from '../shared/constants';
 import type { PopupSessionData } from '../shared/types';
 import { DownloadManager } from './download-manager';
 import { registerIpcHandlers } from './ipc';
+import { ensureNativeMessagingHostRegistered } from './native-host';
 import { createElectronPowerAdapter } from './power';
 import { createAppTray, type AppTrayController } from './tray';
 import { UpdateService } from './updater';
@@ -43,6 +44,7 @@ let shutdownPromise: Promise<void> | null = null;
 let startupUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 const popupWindows = new Map<string, { win: BrowserWindow; data: PopupSessionData }>();
 const isStartupLaunch = process.argv.includes('--startup');
+const isBackgroundLaunch = isStartupLaunch || process.argv.includes('--background-launch');
 
 function syncStartupLoginItem(enabled: boolean): void {
   if (!app.isPackaged || process.env.MYLOAD_SMOKE_TEST === '1') return;
@@ -149,7 +151,7 @@ function openCompactPopup(data: Omit<PopupSessionData, 'sessionId'>): void {
     minHeight: 260,
     frame: false,
     show: false,
-    alwaysOnTop: false,
+    alwaysOnTop: !isProgressOnly,
     resizable: true,
     minimizable: true,
     maximizable: false,
@@ -168,8 +170,15 @@ function openCompactPopup(data: Omit<PopupSessionData, 'sessionId'>): void {
   popupWindows.set(sessionId, { win: popup, data: fullData });
 
   popup.once('ready-to-show', () => {
-    popup.show();
-    popup.focus();
+    if (!isProgressOnly) {
+      popup.setAlwaysOnTop(true, 'pop-up-menu');
+      popup.show();
+      popup.moveTop();
+      popup.focus();
+    } else {
+      popup.show();
+      popup.focus();
+    }
   });
 
   popup.on('closed', () => {
@@ -309,10 +318,12 @@ function createMainWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     if (!isSmokeTest) {
-      if (isStartupLaunch && manager?.getSettings().minimizeToTray) {
-      } else if (isStartupLaunch) {
-        win.showInactive();
-        win.minimize();
+      if (isBackgroundLaunch && manager?.getSettings().minimizeToTray) {
+      } else if (isBackgroundLaunch) {
+        if (!process.argv.includes('--background-launch')) {
+          win.showInactive();
+          win.minimize();
+        }
       } else {
         win.show();
       }
@@ -439,6 +450,17 @@ app.whenReady().then(() => {
           }).show();
         }
       },
+      onExtensionOriginSeen: (extId) => {
+        if (app.isPackaged && process.env.MYLOAD_SMOKE_TEST !== '1') {
+          void ensureNativeMessagingHostRegistered({
+            executablePath: process.execPath,
+            launchExecutablePath: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath,
+            hostScriptPath: path.join(process.resourcesPath, 'native-host.cjs'),
+            userDataDir: app.getPath('userData'),
+            extraExtensionIds: [extId],
+          });
+        }
+      },
     },
   });
 
@@ -482,6 +504,14 @@ app.whenReady().then(() => {
   syncStartupLoginItem(lastStartupEnabled);
 
   if (process.env.MYLOAD_SMOKE_TEST !== '1') {
+    if (app.isPackaged) {
+      void ensureNativeMessagingHostRegistered({
+        executablePath: process.execPath,
+        launchExecutablePath: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath,
+        hostScriptPath: path.join(process.resourcesPath, 'native-host.cjs'),
+        userDataDir: app.getPath('userData'),
+      });
+    }
     void updater.cleanupDownloadedInstallers();
     if (manager.getSettings().autoCheckUpdates) {
       startupUpdateTimer = setTimeout(() => {

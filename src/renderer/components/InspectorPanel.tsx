@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { ChevronDown, FileCheck2, Layers, ScrollText } from 'lucide-react';
 import { formatBytes, formatEta, formatSpeed } from '../../shared/constants';
 import type { DownloadItem, LogEntry } from '../../shared/types';
+import { TorrentFileTree } from './TorrentFileTree';
 
 interface InspectorPanelProps {
   item: DownloadItem;
@@ -36,14 +37,6 @@ export function InspectorPanel({
 
   const activeTab: InspectorTab =
     tab === 'files' && item.kind !== 'torrent' ? 'overview' : tab;
-
-  const toggleTorrentFile = (idx: number) => {
-    const next = torrentFiles
-      .map((f) => (f.index === idx ? { ...f, selected: !f.selected } : f))
-      .filter((f) => f.selected)
-      .map((f) => f.index);
-    onUpdateTorrentFiles(item.id, next);
-  };
 
   return (
     <section
@@ -355,44 +348,12 @@ export function InspectorPanel({
                 Waiting for torrent metadata from peers...
               </div>
             ) : (
-              torrentFiles.map((file) => {
-                const filePct =
-                  file.length > 0
-                    ? Math.min(100, Math.round((file.downloaded / file.length) * 100))
-                    : 100;
-                return (
-                  <div
-                    key={file.index}
-                    className="flex items-center justify-between gap-3 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/60 px-3 py-2"
-                  >
-                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={file.selected}
-                        onChange={() => toggleTorrentFile(file.index)}
-                        className="h-4 w-4 accent-[var(--accent)]"
-                      />
-                      <span className="truncate text-[var(--text-primary)]" title={file.path}>
-                        {file.path}
-                      </span>
-                    </label>
-                    <div className="flex shrink-0 items-center gap-3">
-                      <span className="text-[12px] text-[var(--text-secondary)]">
-                        {formatBytes(file.length)}
-                      </span>
-                      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-[var(--bg-elevated)]">
-                        <div
-                          className="h-full rounded-full bg-[var(--accent)]"
-                          style={{ width: `${filePct}%` }}
-                        />
-                      </div>
-                      <span className="w-9 text-right font-mono text-[11px] text-[var(--text-secondary)]">
-                        {filePct}%
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
+              <TorrentFileTree
+                showProgress
+                files={torrentFiles}
+                selectedIndices={torrentFiles.filter((f) => f.selected).map((f) => f.index)}
+                onChangeSelection={(next) => onUpdateTorrentFiles(item.id, next)}
+              />
             )}
           </div>
         )}

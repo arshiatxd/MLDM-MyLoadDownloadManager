@@ -1,6 +1,6 @@
 {
   "name": "myload",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "MyLoad Download Manager — Modern HTTP/HTTPS and BitTorrent Download Manager",
   "main": "dist/main/index.mjs",
   "type": "module",

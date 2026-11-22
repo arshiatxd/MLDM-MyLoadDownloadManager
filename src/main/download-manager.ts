@@ -42,6 +42,7 @@ import { validateSaveDirectory } from './fs-validation';
 import { HttpDownloadEngine } from './http-engine';
 import { LogManager } from './logger';
 import { scanMultiParts } from './multipart-scanner';
+import { writeActiveBridgePort } from './native-host';
 import { NetworkBalancer } from './network-balancer';
 import { PowerManager, type PowerPlatformAdapter } from './power';
 import { isPathInsideDir, redactSensitiveUrl } from './security';
@@ -96,6 +97,7 @@ export interface ManagerCallbacks {
   onTaskbarProgress?: (progress: number, mode: 'none' | 'normal' | 'indeterminate') => void;
   readClipboard?: () => Promise<string> | string;
   showNotification?: (title: string, body: string) => void;
+  onExtensionOriginSeen?: (extensionId: string) => void;
 }
 
 export class DownloadManager {
@@ -110,6 +112,7 @@ export class DownloadManager {
   private readonly bridge: BrowserBridgeServer;
   private readonly callbacks: ManagerCallbacks;
   private readonly defaultDownloadDir: string;
+  private readonly stateDir: string;
   private readonly enableBridge: boolean;
   private readonly appVersion: string;
 
@@ -143,9 +146,10 @@ export class DownloadManager {
     appVersion?: string;
   }) {
     this.defaultDownloadDir = opts.defaultDownloadDir;
+    this.stateDir = path.dirname(opts.stateFilePath);
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.12';
+    this.appVersion = opts.appVersion ?? '1.0.13';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
@@ -186,6 +190,17 @@ export class DownloadManager {
       onIntercept: (payload) => this.handleBrowserIntercept(payload),
       onMediaScan: (platform, url) => this.socialDownloader.scan(platform, url),
       onMediaDownload: (req) => this.handleBridgeMediaDownload(req),
+      onBridgeStarted: (actualPort) => {
+        writeActiveBridgePort(this.stateDir, actualPort);
+        if (this.settings.browserBridgePort !== actualPort) {
+          this.settings.browserBridgePort = actualPort;
+          this.callbacks.onSettingsUpdated?.({ ...this.settings });
+          void this.store.save(this.downloads, this.settings);
+        }
+      },
+      onExtensionOriginSeen: (extId) => {
+        this.callbacks.onExtensionOriginSeen?.(extId);
+      },
     });
 
     const loaded = this.store.load();

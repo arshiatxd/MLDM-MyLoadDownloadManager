@@ -1,4 +1,5 @@
 !ifndef BUILD_UNINSTALLER
+  !include "WordFunc.nsh"
   Var MyLoadOptionsDialog
   Var MyLoadDesktopShortcutCheckbox
   Var MyLoadDesktopShortcutState
@@ -55,11 +56,39 @@
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MyLoad"
   ClearErrors
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MyLoad Download Manager" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --startup'
+
+  CreateDirectory "$LOCALAPPDATA\MyLoad\native-host"
+  FileOpen $R1 "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd" w
+  FileWrite $R1 '@echo off$\r$\nsetlocal$\r$\nset "ELECTRON_RUN_AS_NODE=1"$\r$\nset "MYLOAD_LAUNCH_EXE=$INSTDIR\${APP_EXECUTABLE_FILENAME}"$\r$\nset "MYLOAD_USER_DATA_DIR=$APPDATA\MyLoad Download Manager"$\r$\n"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "$INSTDIR\resources\native-host.cjs" %*$\r$\n'
+  FileClose $R1
+
+  ${WordReplace} "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd" "\" "\\" "+" $R0
+  FileOpen $R1 "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json" w
+  FileWrite $R1 '{"name":"com.myload.host","description":"MyLoad Download Manager Native Launch Host","path":"$R0","type":"stdio","allowed_origins":["chrome-extension://cbnkknogojpgeikfeaploefenabcgiai/"]}$\r$\n'
+  FileClose $R1
+
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Chromium\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Vivaldi\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Opera Software\Opera Stable\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
 !macroend
 
 !macro customUnInstall
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MyLoad Download Manager"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MyLoad"
+  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Vivaldi\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Opera Software\Opera Stable\NativeMessagingHosts\com.myload.host"
+  Delete "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  Delete "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd"
+  Delete "$LOCALAPPDATA\MyLoad\native-host\native-host.cjs"
+  RMDir "$LOCALAPPDATA\MyLoad\native-host"
+  RMDir "$LOCALAPPDATA\MyLoad"
   ClearErrors
   IfFileExists "$DESKTOP\${SHORTCUT_NAME}.lnk" 0 +3
     WinShell::UninstShortcut "$DESKTOP\${SHORTCUT_NAME}.lnk"

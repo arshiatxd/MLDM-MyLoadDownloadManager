@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   FolderOpen,
   LayoutGrid,
@@ -49,6 +51,7 @@ import {
   buildScheduleFromControls,
   createInitialScheduleControls,
 } from './ScheduleControlsCard';
+import { TorrentFileTree } from './TorrentFileTree';
 
 interface CompactDownloadFrameProps {
   sessionId: string;
@@ -88,6 +91,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     createInitialScheduleControls()
   );
   const [submitting, setSubmitting] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const [showProgressFiles, setShowProgressFiles] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saveDirTouched, setSaveDirTouched] = useState(false);
 
@@ -242,6 +247,11 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     settings.multiPartDontAskAgain,
     settings.multiPartDefaultAction,
   ]);
+
+  useEffect(() => {
+    if (mode !== 'progress') return;
+    void window.myload.resizeCurrentWindow(540, showProgressFiles ? 500 : 330);
+  }, [mode, showProgressFiles]);
 
   const multiPartActive = Boolean(scanResult?.matched && (scanResult.parts.length ?? 0) > 1);
   const torrentFiles = probe?.files ?? [];
@@ -424,7 +434,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         }
         setTrackedIds(created.map((d) => d.id));
         setMode('progress');
-        await window.myload.resizeCurrentWindow(520, 320);
+        await window.myload.setWindowAlwaysOnTop(false);
+        await window.myload.resizeCurrentWindow(540, 330);
         return;
       }
 
@@ -447,7 +458,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         }
         setTrackedIds(created.map((d) => d.id));
         setMode('progress');
-        await window.myload.resizeCurrentWindow(520, 320);
+        await window.myload.setWindowAlwaysOnTop(false);
+        await window.myload.resizeCurrentWindow(540, 330);
         return;
       }
 
@@ -470,11 +482,26 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
 
       setTrackedIds([item.id]);
       setMode('progress');
-      await window.myload.resizeCurrentWindow(520, 320);
+      await window.myload.setWindowAlwaysOnTop(false);
+      await window.myload.resizeCurrentWindow(540, 330);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to start download');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCancelDownload = async () => {
+    if (canceling) return;
+    setCanceling(true);
+    try {
+      if (trackedIds.length > 0) {
+        await window.myload.removeDownloads(trackedIds, true);
+      }
+      await window.myload.closeWindow();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to cancel download');
+      setCanceling(false);
     }
   };
 
@@ -662,41 +689,12 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
           )}
 
           {torrentFiles.length > 0 && (
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/70 p-2.5 text-xs">
-              <div className="mb-1.5 font-medium text-[var(--text-primary)]">
-                Files ({selectedFileIndices.length}/{torrentFiles.length})
-              </div>
-              <div className="max-h-28 space-y-1 overflow-y-auto">
-                {torrentFiles.map((file) => {
-                  const checked = selectedFileIndices.includes(file.index);
-                  return (
-                    <label
-                      key={file.index}
-                      className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-1.5 py-1 hover:bg-[var(--bg-hover)]/50"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            setSelectedFileIndices((prev) =>
-                              prev.includes(file.index)
-                                ? prev.filter((i) => i !== file.index)
-                                : [...prev, file.index]
-                            )
-                          }
-                          className="h-3.5 w-3.5 accent-[var(--accent)]"
-                        />
-                        <span className="truncate">{file.path}</span>
-                      </span>
-                      <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">
-                        {formatBytes(file.length)}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
+            <TorrentFileTree
+              compact
+              files={torrentFiles}
+              selectedIndices={selectedFileIndices}
+              onChangeSelection={setSelectedFileIndices}
+            />
           )}
 
           <div className="flex items-center justify-between text-[11.5px] text-[var(--text-secondary)]">
@@ -845,6 +843,48 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
               </div>
             )}
 
+            {primaryItem && primaryItem.kind === 'torrent' && (
+              <div className="space-y-1.5">
+                {(primaryItem.torrent?.files?.length ?? 0) > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowProgressFiles((v) => !v)}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--accent-text)] hover:underline cursor-pointer"
+                    >
+                      {showProgressFiles ? (
+                        <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      <span>
+                        Files &amp; Folders (
+                        {primaryItem.torrent!.files.filter((f) => f.selected).length}/
+                        {primaryItem.torrent!.files.length} selected)
+                      </span>
+                    </button>
+                    {showProgressFiles && (
+                      <TorrentFileTree
+                        compact
+                        showProgress
+                        files={primaryItem.torrent!.files}
+                        selectedIndices={primaryItem.torrent!.files
+                          .filter((f) => f.selected)
+                          .map((f) => f.index)}
+                        onChangeSelection={(next) =>
+                          void window.myload.updateTorrentFiles(primaryItem.id, next)
+                        }
+                      />
+                    )}
+                  </>
+                ) : (
+                  <div className="text-[11.5px] text-[var(--text-secondary)]">
+                    Discovering torrent files &amp; folders from peers...
+                  </div>
+                )}
+              </div>
+            )}
+
             {primaryItem?.errorMessage && (
               <div className="rounded-xl border border-[var(--danger)]/40 bg-[var(--danger-soft)] px-2.5 py-1.5 text-xs text-[var(--danger)]">
                 {primaryItem.errorMessage}
@@ -913,6 +953,18 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
                     <span>{t(settings.language, 'pause')}</span>
                   </button>
                 ) : null}
+
+                {!allCompleted && trackedIds.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={canceling}
+                    onClick={() => void handleCancelDownload()}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-[var(--danger)]/45 bg-[var(--danger-soft)]/50 px-3 text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-45 cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{canceling ? 'Canceling...' : t(settings.language, 'cancel')}</span>
+                  </button>
+                )}
               </div>
 
               <button

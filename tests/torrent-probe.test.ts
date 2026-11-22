@@ -10,6 +10,7 @@ import {
   probeTorrentSource,
   resolveTorrentTargetPath,
 } from '../src/main/torrent-engine';
+import { buildTorrentTree } from '../src/shared/torrent-tree';
 
 describe('torrent probing', () => {
   let tmpDir: string;
@@ -84,6 +85,38 @@ describe('torrent probing', () => {
     expect(
       resolveTorrentTargetPath(saveDir, 'safe-folder', ['../outside.exe'], 'fallback')
     ).toBe(path.join(saveDir, 'safe-folder'));
+  });
+
+  it('builds hierarchical torrent folder trees, aggregates sizes, and filters cleanly', () => {
+    const tree = buildTorrentTree([
+      { index: 0, name: 'data1.bin', path: 'GamePack/data/data1.bin', length: 5000, downloaded: 2500, selected: true },
+      { index: 1, name: 'data2.bin', path: 'GamePack/data/data2.bin', length: 3000, downloaded: 1500, selected: true },
+      { index: 2, name: 'setup.exe', path: 'GamePack/setup.exe', length: 1200, downloaded: 1200, selected: false },
+      { index: 3, name: 'readme.txt', path: 'GamePack/docs/readme.txt', length: 400, downloaded: 0, selected: true },
+    ]);
+
+    expect(tree).toHaveLength(1);
+    const root = tree[0];
+    expect(root.isFolder).toBe(true);
+    expect(root.name).toBe('GamePack');
+    expect(root.totalBytes).toBe(9600);
+    expect(root.downloadedBytes).toBe(5200);
+    expect(root.fileIndices).toEqual([0, 1, 3, 2]);
+    expect(root.children[0].name).toBe('data');
+    expect(root.children[0].totalBytes).toBe(8000);
+    expect(root.children[1].name).toBe('docs');
+    expect(root.children[2].name).toBe('setup.exe');
+
+    const filtered = buildTorrentTree(
+      [
+        { index: 0, name: 'data1.bin', path: 'GamePack/data/data1.bin', length: 5000, downloaded: 0, selected: true },
+        { index: 1, name: 'setup.exe', path: 'GamePack/setup.exe', length: 1200, downloaded: 0, selected: true },
+      ],
+      'setup'
+    );
+    expect(filtered[0].children).toHaveLength(1);
+    expect(filtered[0].children[0].name).toBe('setup.exe');
+    expect(filtered[0].totalBytes).toBe(1200);
   });
 
   it('initializes WebTorrent client cleanly and removes bulk selected downloads and folders together', async () => {

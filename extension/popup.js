@@ -1,3 +1,6 @@
+const BRIDGE_PORTS = [49173, 49174, 49175, 49176, 49177, 49178, 49179, 49180, 49181, 49182];
+const NATIVE_HOST_NAME = 'com.myload.host';
+
 const DEFAULT_SETTINGS = {
   enabled: true,
   port: 49173,
@@ -145,34 +148,85 @@ function getPort() {
   return Math.min(65535, Math.max(1024, Number(portInput.value) || 49173));
 }
 
-async function checkBridge(port) {
-  statusPill.className = 'pill pill-muted';
-  statusPill.textContent = 'Checking...';
+async function queryHealth(port) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1500);
+  const timer = setTimeout(() => controller.abort(), 900);
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/health`, {
       headers: { 'X-MyLoad-Client': 'myload-extension' },
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function wakeNativeApp(preferredPort, focusMain = false) {
+  if (!chrome.runtime?.sendNativeMessage) {
+    return null;
+  }
+  try {
+    const res = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: 'ensure-running',
+      preferredPort,
+      focusMain,
+    });
+    if (res && res.ok && typeof res.port === 'number') {
+      portInput.value = String(res.port);
+      await chrome.storage.local.set({ port: res.port }).catch(() => {});
+      return res.port;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function checkBridge(port) {
+  statusPill.className = 'pill pill-muted';
+  statusPill.textContent = 'Checking...';
+
+  let activePort = port;
+  let data = await queryHealth(port);
+  if (!data) {
+    const others = BRIDGE_PORTS.filter((p) => p !== port);
+    const probes = await Promise.all(
+      others.map(async (p) => {
+        const d = await queryHealth(p);
+        return d ? { port: p, data: d } : null;
+      })
+    );
+    const hit = probes.find((item) => item !== null);
+    if (hit) {
+      activePort = hit.port;
+      data = hit.data;
+      portInput.value = String(hit.port);
+      await chrome.storage.local.set({ port: hit.port }).catch(() => {});
+    }
+  }
+
+  if (data) {
     bridgeOnline = true;
     statusPill.className = 'pill pill-ok';
     statusPill.textContent =
       data.activeCount > 0
         ? `Connected (${data.activeCount} · ${formatSpeed(data.totalDownloadSpeed)})`
         : 'Connected';
+    focusBtn.textContent = 'Open MyLoad';
     focusBtn.disabled = false;
-  } catch {
+  } else {
     bridgeOnline = false;
     statusPill.className = 'pill pill-off';
     statusPill.textContent = 'MyLoad offline';
-    focusBtn.disabled = true;
-  } finally {
-    clearTimeout(timer);
-    if (activeTab !== 'home') renderMediaTab();
+    focusBtn.textContent = 'Launch MyLoad';
+    focusBtn.disabled = false;
   }
+  if (activeTab !== 'home') renderMediaTab();
+  return bridgeOnline ? activePort : null;
 }
 
 async function saveFromInputs() {
@@ -229,10 +283,10 @@ function updateSelectedSummary(st) {
   if (totalAll > 1) {
     mediaDownloadBtn.textContent =
       totalSel > 0 ? `Download Selected (${totalSel})` : 'Select items to download';
-    mediaDownloadBtn.disabled = !bridgeOnline || totalSel === 0 || st.loading;
+    mediaDownloadBtn.disabled = totalSel === 0 || st.loading;
   } else {
     mediaDownloadBtn.textContent = 'Download';
-    mediaDownloadBtn.disabled = !bridgeOnline || st.loading;
+    mediaDownloadBtn.disabled = st.loading;
   }
 }
 
@@ -472,7 +526,17 @@ async function handleScan() {
   }
 
   if (!bridgeOnline) {
-    st.error = 'MyLoad Download Manager appears offline. Open MyLoad and click Retry.';
+    st.loading = true;
+    renderMediaTab();
+    const livePort = (await checkBridge(getPort())) ?? (await wakeNativeApp(getPort(), false));
+    if (livePort !== null) {
+      await checkBridge(livePort);
+    }
+  }
+
+  if (!bridgeOnline) {
+    st.loading = false;
+    st.error = 'MyLoad Download Manager appears offline. Click Launch MyLoad or Retry.';
     renderMediaTab();
     return;
   }
@@ -525,6 +589,17 @@ async function handleDownloadMedia() {
   renderMediaTab();
 
   try {
+    if (!bridgeOnline) {
+      const livePort = (await checkBridge(getPort())) ?? (await wakeNativeApp(getPort(), false));
+      if (livePort !== null) {
+        await checkBridge(livePort);
+      }
+      if (!bridgeOnline) {
+        st.error = 'MyLoad Download Manager appears offline. Click Launch MyLoad or Retry.';
+        return;
+      }
+    }
+
     const hasAnyVideo = st.scan.items.some((i) => i.kind === 'video');
     const showFormatOptions =
       activeTab === 'spotify' ||
@@ -679,13 +754,30 @@ refreshBtn.addEventListener('click', () => {
 
 focusBtn.addEventListener('click', async () => {
   const port = getPort();
+  focusBtn.disabled = true;
   try {
-    await fetch(`http://127.0.0.1:${port}/api/v1/focus`, {
+    if (!bridgeOnline) {
+      const woken = await wakeNativeApp(port, true);
+      if (woken !== null) {
+        await checkBridge(woken);
+        return;
+      }
+      await checkBridge(port);
+      return;
+    }
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/focus`, {
       method: 'POST',
       headers: { 'X-MyLoad-Client': 'myload-extension' },
     });
+    if (!res.ok) {
+      await wakeNativeApp(port, true);
+      await checkBridge(port);
+    }
   } catch {
-    void checkBridge(port);
+    await wakeNativeApp(port, true);
+    await checkBridge(port);
+  } finally {
+    focusBtn.disabled = false;
   }
 });
 

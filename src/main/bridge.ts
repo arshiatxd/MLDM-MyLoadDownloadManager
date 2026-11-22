@@ -13,6 +13,7 @@ import type {
   SocialScanResult,
 } from '../shared/types';
 import type { LogManager } from './logger';
+import { BRIDGE_PORT_CANDIDATES } from './native-host';
 import { isAllowedExtensionOrigin, sanitizeHeaderValue } from './security';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -54,6 +55,8 @@ export interface BridgeHandlers {
   onMediaDownload?: (
     req: SocialDownloadRequest
   ) => Promise<{ ok: boolean; count: number; mode?: 'confirm' | 'started'; error?: string }>;
+  onBridgeStarted?: (port: number) => void;
+  onExtensionOriginSeen?: (extensionId: string) => void;
 }
 
 export class BrowserBridgeServer {
@@ -61,6 +64,7 @@ export class BrowserBridgeServer {
   private readonly handlers: BridgeHandlers;
   private server: http.Server | null = null;
   private status: BridgeStatus = { running: false, port: 49173 };
+  private readonly seenExtensionIds = new Set<string>();
 
   constructor(logger: LogManager, handlers: BridgeHandlers) {
     this.logger = logger;
@@ -71,9 +75,40 @@ export class BrowserBridgeServer {
     return { ...this.status };
   }
 
-  async start(port: number): Promise<BridgeStatus> {
+  async start(preferredPort: number): Promise<BridgeStatus> {
     await this.stop();
 
+    if (preferredPort === 0) {
+      return this.tryBindPort(0);
+    }
+
+    const candidates = [preferredPort];
+    for (const candidate of BRIDGE_PORT_CANDIDATES) {
+      if (candidate !== preferredPort) {
+        candidates.push(candidate);
+      }
+    }
+
+    let lastStatus: BridgeStatus = { running: false, port: preferredPort };
+    for (const port of candidates) {
+      const res = await this.tryBindPort(port);
+      if (res.running) {
+        return res;
+      }
+      lastStatus = res;
+      if (!res.inUse) {
+        return { running: false, port: res.port, error: res.error };
+      }
+    }
+
+    return {
+      running: false,
+      port: lastStatus.port,
+      error: lastStatus.error || 'All bridge ports are currently in use',
+    };
+  }
+
+  private tryBindPort(port: number): Promise<BridgeStatus & { inUse?: boolean }> {
     const server = http.createServer((req, res) => {
       void this.handleRequest(req, res);
     });
@@ -81,19 +116,23 @@ export class BrowserBridgeServer {
     this.server = server;
 
     return new Promise((resolve) => {
-      const onError = (err: Error) => {
+      const onError = (err: NodeJS.ErrnoException) => {
         const msg = err.message || 'Failed to start browser bridge';
-        this.logger.error('Bridge', `Failed to bind 127.0.0.1:${port}: ${msg}`);
+        const inUse = err.code === 'EADDRINUSE';
+        if (!inUse) {
+          this.logger.error('Bridge', `Failed to bind 127.0.0.1:${port}: ${msg}`);
+        } else {
+          this.logger.warn('Bridge', `Port 127.0.0.1:${port} is in use; trying next bridge port`);
+        }
         this.status = { running: false, port, error: msg };
         try {
           server.close();
         } catch {
-
         }
         if (this.server === server) {
           this.server = null;
         }
-        resolve(this.getStatus());
+        resolve({ ...this.getStatus(), inUse });
       };
 
       server.once('error', onError);
@@ -103,6 +142,7 @@ export class BrowserBridgeServer {
         const actualPort = typeof addr === 'object' && addr ? addr.port : port;
         this.status = { running: true, port: actualPort };
         this.logger.info('Bridge', `Browser extension bridge listening on 127.0.0.1:${actualPort}`);
+        this.handlers.onBridgeStarted?.(actualPort);
         resolve(this.getStatus());
       });
     });
@@ -135,6 +175,17 @@ export class BrowserBridgeServer {
       return;
     }
 
+    if (origin && req.method !== 'OPTIONS') {
+      const extMatch = /^chrome-extension:\/\/([a-p]{32})$/i.exec(origin);
+      if (extMatch) {
+        const extId = extMatch[1].toLowerCase();
+        if (!this.seenExtensionIds.has(extId)) {
+          this.seenExtensionIds.add(extId);
+          this.handlers.onExtensionOriginSeen?.(extId);
+        }
+      }
+    }
+
     if (req.method === 'OPTIONS') {
       if (origin && isAllowedExtensionOrigin(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
@@ -161,7 +212,7 @@ export class BrowserBridgeServer {
       this.sendJson(res, 200, {
         ok: true,
         app: 'MyLoad',
-        version: '1.0.12',
+        version: '1.0.13',
         ...health,
       });
       return;

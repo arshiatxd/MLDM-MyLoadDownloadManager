@@ -172,6 +172,18 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:open-repo-url', async () => {
     await shell.openExternal(REPOSITORY_URL);
   });
+  ipcMain.handle(
+    'myload:open-external-link',
+    async (_e, target: 'repo' | 'profile' | 'email') => {
+      if (target === 'repo') {
+        await shell.openExternal(REPOSITORY_URL);
+      } else if (target === 'profile') {
+        await shell.openExternal('https://github.com/arshiatxd');
+      } else if (target === 'email') {
+        await shell.openExternal('mailto:arshiyatxd@gmail.com');
+      }
+    }
+  );
   ipcMain.handle('myload:get-update-status', () => updater.getStatus());
   ipcMain.handle('myload:check-updates', () => updater.checkForUpdates());
   ipcMain.handle('myload:download-update', async () => {
@@ -283,6 +295,13 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:win-is-maximized', (e) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? getWindow();
     return senderWin?.isMaximized() ?? false;
+  });
+
+  ipcMain.handle('myload:win-set-always-on-top', (e, flag: boolean) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender);
+    if (senderWin && !senderWin.isDestroyed()) {
+      senderWin.setAlwaysOnTop(Boolean(flag));
+    }
   });
 
   ipcMain.handle('myload:app-quit', () => {

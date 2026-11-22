@@ -444,6 +444,7 @@ export interface MyLoadApi {
   readClipboardText: () => Promise<string>;
   getLastCopiedDownloadableLink: () => Promise<string | null>;
   openRepositoryUrl: () => Promise<void>;
+  openExternalLink: (target: 'repo' | 'profile' | 'email') => Promise<void>;
   getUpdateStatus: () => Promise<UpdateStatus>;
   checkForUpdates: () => Promise<UpdateStatus>;
   downloadAndInstallUpdate: () => Promise<UpdateStatus>;
@@ -457,6 +458,7 @@ export interface MyLoadApi {
   minimizeWindow: () => Promise<void>;
   maximizeWindow: () => Promise<void>;
   closeWindow: () => Promise<void>;
+  setWindowAlwaysOnTop: (flag: boolean) => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
   quitApp: () => Promise<void>;
   getPathForFile: (file: File) => string;

@@ -73,6 +73,8 @@ const api: MyLoadApi = {
   readClipboardText: () => ipcRenderer.invoke('myload:read-clipboard'),
   getLastCopiedDownloadableLink: () => ipcRenderer.invoke('myload:get-clipboard-link'),
   openRepositoryUrl: () => ipcRenderer.invoke('myload:open-repo-url'),
+  openExternalLink: (target: 'repo' | 'profile' | 'email') =>
+    ipcRenderer.invoke('myload:open-external-link', target),
   getUpdateStatus: () => ipcRenderer.invoke('myload:get-update-status'),
   checkForUpdates: () => ipcRenderer.invoke('myload:check-updates'),
   downloadAndInstallUpdate: () => ipcRenderer.invoke('myload:download-update'),
@@ -87,6 +89,8 @@ const api: MyLoadApi = {
   minimizeWindow: () => ipcRenderer.invoke('myload:win-minimize'),
   maximizeWindow: () => ipcRenderer.invoke('myload:win-maximize'),
   closeWindow: () => ipcRenderer.invoke('myload:win-close'),
+  setWindowAlwaysOnTop: (flag: boolean) =>
+    ipcRenderer.invoke('myload:win-set-always-on-top', flag),
   isWindowMaximized: () => ipcRenderer.invoke('myload:win-is-maximized'),
   quitApp: () => ipcRenderer.invoke('myload:app-quit'),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

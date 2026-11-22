@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserBridgeServer } from '../src/main/bridge';
 import { LogManager } from '../src/main/logger';
@@ -112,6 +113,35 @@ describe('BrowserBridgeServer', () => {
       cookie: 'session=abc123',
       fileSize: 4096,
     });
+  });
+
+  it('automatically falls back to the next free localhost bridge port when preferred port is busy', async () => {
+    const logger = new LogManager(null);
+    const blocker = http.createServer();
+    await new Promise<void>((r) => blocker.listen(49173, '127.0.0.1', r));
+    const blockerAddr = blocker.address() as { port: number };
+    const startedPorts: number[] = [];
+
+    try {
+      bridge = new BrowserBridgeServer(logger, {
+        getHealth: () => ({
+          activeCount: 0,
+          totalDownloadSpeed: 0,
+          showConfirmationDialog: true,
+        }),
+        onFocusWindow: vi.fn(),
+        onIntercept: async () => 'confirm',
+        onBridgeStarted: (p) => startedPorts.push(p),
+      });
+
+      const status = await bridge.start(blockerAddr.port);
+      expect(status.running).toBe(true);
+      expect(status.port).not.toBe(blockerAddr.port);
+      expect(status.port).toBe(49174);
+      expect(startedPorts).toEqual([status.port]);
+    } finally {
+      await new Promise<void>((r) => blocker.close(() => r()));
+    }
   });
 });
 

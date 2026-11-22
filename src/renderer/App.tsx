@@ -23,6 +23,7 @@ import {
   AddDownloadModal,
   type AddDownloadInitialRequest,
 } from './components/AddDownloadModal';
+import { CopyrightModal } from './components/CopyrightModal';
 import { DownloadTable } from './components/DownloadTable';
 import { FilterTabsBar } from './components/FilterTabsBar';
 import { InspectorPanel } from './components/InspectorPanel';
@@ -58,6 +59,7 @@ export function App() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [copyrightOpen, setCopyrightOpen] = useState(false);
   const [previewCustomColors, setPreviewCustomColors] =
     useState<CustomThemeColors | null>(null);
   const [removeModal, setRemoveModal] = useState<{
@@ -360,7 +362,7 @@ export function App() {
         return;
       }
 
-      if (addModalOpen || settingsOpen || logsOpen || aboutOpen || privacyOpen || removeModal || showUpdatePrompt) {
+      if (addModalOpen || settingsOpen || logsOpen || aboutOpen || privacyOpen || copyrightOpen || removeModal || showUpdatePrompt) {
         return;
       }
 
@@ -407,6 +409,7 @@ export function App() {
     logsOpen,
     aboutOpen,
     privacyOpen,
+    copyrightOpen,
     removeModal,
     showUpdatePrompt,
     visibleDownloads,
@@ -736,6 +739,7 @@ export function App() {
         hasFocusedItem={Boolean(focusedItem)}
         inspectorOpen={inspectorOpen && Boolean(focusedItem)}
         onToggleInspector={() => setInspectorOpen((o) => !o)}
+        onOpenCopyright={() => setCopyrightOpen(true)}
         onUpdateSettings={handleUpdateSettings}
       />
 
@@ -850,6 +854,12 @@ export function App() {
       />
 
       <PrivacyPolicyModal open={privacyOpen} onClose={() => setPrivacyOpen(false)} />
+
+      <CopyrightModal
+        open={copyrightOpen}
+        appVersion={appVersion}
+        onClose={() => setCopyrightOpen(false)}
+      />
 
       <UpdatePromptModal
         open={showUpdatePrompt}

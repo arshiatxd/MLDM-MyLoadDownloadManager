@@ -29,6 +29,8 @@ asarUnpack:
 extraResources:
   - from: extension
     to: extension
+  - from: dist/main/native-host.cjs
+    to: native-host.cjs
 npmRebuild: false
 win:
   icon: build/icon.ico
@@ -48,7 +50,7 @@ nsis:
   createStartMenuShortcut: true
   include: build/installer.nsh
   shortcutName: MyLoad Download Manager
-  uninstallDisplayName: MyLoad Download Manager 1.0.12
+  uninstallDisplayName: MyLoad Download Manager 1.0.13
   license: build/license.txt
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico

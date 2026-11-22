@@ -16,6 +16,7 @@ import type {
 import type { LogManager } from './logger';
 import { ensureYtDlp, findFfmpeg, runProcess } from './media-tools';
 import {
+  describeCustomHttpError,
   detectPrivateError,
   isPrivateIpAddress,
   isPrivateOrLocalHost,
@@ -473,7 +474,8 @@ export class SocialMediaDownloader {
     try {
       const pageRes = await fetchHttpText(rawUrl, 5, true);
       const finalUrl = pageRes.finalUrl || rawUrl;
-      if (pageRes.statusCode === 401 || pageRes.statusCode === 403) {
+      const httpErr = describeCustomHttpError(pageRes.statusCode);
+      if (httpErr) {
         return {
           ok: false,
           platform: 'custom',
@@ -481,8 +483,8 @@ export class SocialMediaDownloader {
           url: finalUrl,
           title: 'Custom URL',
           items: [],
-          isPrivate: true,
-          error: 'This page requires authentication or access permission and cannot be scanned.',
+          isPrivate: httpErr.isPrivate,
+          error: httpErr.error,
         };
       }
       return parseCustomPageHtml(pageRes.body, finalUrl);

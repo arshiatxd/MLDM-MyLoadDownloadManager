@@ -6,6 +6,7 @@ import { BrowserBridgeServer } from '../src/main/bridge';
 import { DownloadManager } from '../src/main/download-manager';
 import { LogManager } from '../src/main/logger';
 import {
+  describeCustomHttpError,
   detectPrivateError,
   normalizeYtDlpMetadata,
   parseCustomPageHtml,
@@ -493,6 +494,22 @@ describe('custom URL scanner', () => {
     expect(urls.some((u) => u?.includes('favicon') || u?.startsWith('data:') || u?.includes('logo-tiny'))).toBe(
       false
     );
+  });
+
+  it('describes HTTP error status codes clearly for custom URL scans', () => {
+    expect(describeCustomHttpError(200)).toBeNull();
+    expect(describeCustomHttpError(401)).toEqual({
+      isPrivate: true,
+      error: 'HTTP 401 Unauthorized — this page requires you to sign in.',
+    });
+    expect(describeCustomHttpError(403)).toEqual({
+      isPrivate: true,
+      error:
+        'HTTP 403 Forbidden — this site blocked automated access or uses anti-bot protection.',
+    });
+    expect(describeCustomHttpError(404)?.error).toContain('HTTP 404 Not Found');
+    expect(describeCustomHttpError(429)?.error).toContain('HTTP 429 Too Many Requests');
+    expect(describeCustomHttpError(502)?.error).toContain('HTTP 502 Server Error');
   });
 });
 

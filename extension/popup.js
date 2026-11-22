@@ -107,6 +107,7 @@ const qualitySelectEl = document.getElementById('media-quality-select');
 const bundleWrapEl = document.getElementById('bundle-wrap');
 const bundleSelectEl = document.getElementById('media-bundle-select');
 const itemsSectionEl = document.getElementById('media-items-section');
+const kindFiltersEl = document.getElementById('media-kind-filters');
 const selectAllCheckbox = document.getElementById('select-all-checkbox');
 const selectedCountEl = document.getElementById('selected-count');
 const itemsListEl = document.getElementById('media-items-list');
@@ -118,11 +119,11 @@ let activeTab = 'home';
 let activeTabUrl = '';
 
 const platformStates = {
-  youtube: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
-  instagram: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
-  tiktok: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
-  spotify: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp3', quality: '320k', bundleMode: 'individual' },
-  custom: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
+  youtube: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), kindFilter: 'all', format: 'mp4', quality: 'best', bundleMode: 'individual' },
+  instagram: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), kindFilter: 'all', format: 'mp4', quality: 'best', bundleMode: 'individual' },
+  tiktok: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), kindFilter: 'all', format: 'mp4', quality: 'best', bundleMode: 'individual' },
+  spotify: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), kindFilter: 'all', format: 'mp3', quality: '320k', bundleMode: 'individual' },
+  custom: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), kindFilter: 'all', format: 'mp4', quality: 'best', bundleMode: 'individual' },
 };
 
 function formatSpeed(bytes) {
@@ -209,18 +210,26 @@ function setOptions(selectEl, options, selectedVal) {
   }
 }
 
-function updateSelectedSummary(st) {
+function getVisibleItems(st) {
   const items = st.scan?.items || [];
-  const total = items.length;
-  const selCount = items.filter((it) => st.selectedIds.has(it.id)).length;
-  selectedCountEl.textContent = `${selCount} / ${total} selected`;
-  selectAllCheckbox.checked = total > 0 && selCount === total;
-  selectAllCheckbox.indeterminate = selCount > 0 && selCount < total;
+  if (!st.kindFilter || st.kindFilter === 'all') return items;
+  return items.filter((it) => it.kind === st.kindFilter);
+}
 
-  if (total > 1) {
+function updateSelectedSummary(st) {
+  const allItems = st.scan?.items || [];
+  const visibleItems = getVisibleItems(st);
+  const totalAll = allItems.length;
+  const totalSel = allItems.filter((it) => st.selectedIds.has(it.id)).length;
+  const visSel = visibleItems.filter((it) => st.selectedIds.has(it.id)).length;
+  selectedCountEl.textContent = `${totalSel} / ${totalAll} selected`;
+  selectAllCheckbox.checked = visibleItems.length > 0 && visSel === visibleItems.length;
+  selectAllCheckbox.indeterminate = visSel > 0 && visSel < visibleItems.length;
+
+  if (totalAll > 1) {
     mediaDownloadBtn.textContent =
-      selCount > 0 ? `Download Selected (${selCount})` : 'Select items to download';
-    mediaDownloadBtn.disabled = !bridgeOnline || selCount === 0 || st.loading;
+      totalSel > 0 ? `Download Selected (${totalSel})` : 'Select items to download';
+    mediaDownloadBtn.disabled = !bridgeOnline || totalSel === 0 || st.loading;
   } else {
     mediaDownloadBtn.textContent = 'Download';
     mediaDownloadBtn.disabled = !bridgeOnline || st.loading;
@@ -328,11 +337,43 @@ function renderMediaTab() {
     mediaOptionsEl.classList.add('hidden');
   }
 
+  while (kindFiltersEl.firstChild) kindFiltersEl.removeChild(kindFiltersEl.firstChild);
   while (itemsListEl.firstChild) itemsListEl.removeChild(itemsListEl.firstChild);
 
   if (scan.items.length > 1) {
+    const counts = { video: 0, audio: 0, image: 0 };
+    for (const it of scan.items) {
+      if (it.kind === 'video' || it.kind === 'audio' || it.kind === 'image') {
+        counts[it.kind] += 1;
+      }
+    }
+    const presentKinds = Object.keys(counts).filter((k) => counts[k] > 0);
+    if (presentKinds.length >= 2) {
+      kindFiltersEl.classList.remove('hidden');
+      const chips = [
+        { key: 'all', label: `All (${scan.items.length})` },
+        ...(counts.video > 0 ? [{ key: 'video', label: `Videos (${counts.video})` }] : []),
+        ...(counts.audio > 0 ? [{ key: 'audio', label: `Audio (${counts.audio})` }] : []),
+        ...(counts.image > 0 ? [{ key: 'image', label: `Images (${counts.image})` }] : []),
+      ];
+      for (const chip of chips) {
+        const chipBtn = document.createElement('button');
+        chipBtn.type = 'button';
+        chipBtn.className = `kind-chip${st.kindFilter === chip.key ? ' active' : ''}`;
+        chipBtn.textContent = chip.label;
+        chipBtn.addEventListener('click', () => {
+          st.kindFilter = chip.key;
+          renderMediaTab();
+        });
+        kindFiltersEl.appendChild(chipBtn);
+      }
+    } else {
+      kindFiltersEl.classList.add('hidden');
+      st.kindFilter = 'all';
+    }
+
     itemsSectionEl.classList.remove('hidden');
-    for (const item of scan.items) {
+    for (const item of getVisibleItems(st)) {
       const row = document.createElement('label');
       row.className = 'item-row';
 
@@ -455,6 +496,7 @@ async function handleScan() {
       st.scan = null;
     } else {
       st.scan = data;
+      st.kindFilter = 'all';
       st.selectedIds = new Set((data.items || []).map((i) => i.id));
       if (activeTab === 'youtube' && data.contentType === 'music') {
         st.format = 'mp3';
@@ -617,11 +659,11 @@ bundleSelectEl.addEventListener('change', () => {
 selectAllCheckbox.addEventListener('change', () => {
   if (activeTab === 'home') return;
   const st = platformStates[activeTab];
-  const items = st.scan?.items || [];
+  const visibleItems = getVisibleItems(st);
   if (selectAllCheckbox.checked) {
-    st.selectedIds = new Set(items.map((i) => i.id));
+    for (const item of visibleItems) st.selectedIds.add(item.id);
   } else {
-    st.selectedIds.clear();
+    for (const item of visibleItems) st.selectedIds.delete(item.id);
   }
   renderMediaTab();
 });

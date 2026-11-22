@@ -1197,3 +1197,47 @@ export function parseCustomPageHtml(html: string, pageUrl: string): SocialScanRe
   };
 }
 
+export function describeCustomHttpError(
+  statusCode: number
+): { error: string; isPrivate: boolean } | null {
+  if (statusCode >= 200 && statusCode < 300) {
+    return null;
+  }
+  if (statusCode === 401) {
+    return {
+      isPrivate: true,
+      error: 'HTTP 401 Unauthorized — this page requires you to sign in.',
+    };
+  }
+  if (statusCode === 403) {
+    return {
+      isPrivate: true,
+      error:
+        'HTTP 403 Forbidden — this site blocked automated access or uses anti-bot protection.',
+    };
+  }
+  if (statusCode === 404 || statusCode === 410) {
+    return {
+      isPrivate: false,
+      error: 'HTTP 404 Not Found — this page does not exist or has been removed.',
+    };
+  }
+  if (statusCode === 429) {
+    return {
+      isPrivate: false,
+      error:
+        'HTTP 429 Too Many Requests — this site is temporarily rate-limiting requests. Try again later.',
+    };
+  }
+  if (statusCode >= 500) {
+    return {
+      isPrivate: false,
+      error: `HTTP ${statusCode} Server Error — the remote website returned an error.`,
+    };
+  }
+  return {
+    isPrivate: false,
+    error: `HTTP ${statusCode} — unable to load this webpage.`,
+  };
+}
+

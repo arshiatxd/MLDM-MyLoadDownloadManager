@@ -20,7 +20,7 @@ const MAX_MEDIA_BODY_BYTES = 256 * 1024;
 const CLIENT_HEADER = 'x-myload-client';
 const EXPECTED_CLIENT = 'myload-extension';
 
-const VALID_PLATFORMS = new Set<SocialPlatform>(['youtube', 'instagram', 'tiktok', 'spotify']);
+const VALID_PLATFORMS = new Set<SocialPlatform>(['youtube', 'instagram', 'tiktok', 'spotify', 'custom']);
 const VALID_FORMATS = new Set<MediaOutputFormat>([
   'mp4',
   'mkv',

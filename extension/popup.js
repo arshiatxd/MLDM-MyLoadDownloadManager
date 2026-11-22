@@ -30,6 +30,12 @@ const PLATFORM_CONFIG = {
     placeholder: 'https://open.spotify.com/track/... or /album/... or /playlist/...',
     hostRe: /(?:^|\.)(?:spotify\.com|spotify\.link|spotify\.app\.link)$/i,
   },
+  custom: {
+    title: 'Custom URL',
+    hint: 'Paste any public webpage link to scan for embedded videos, audio streams, or images.',
+    placeholder: 'https://example.com/page-with-media',
+    hostRe: null,
+  },
 };
 
 const VIDEO_FORMATS = [
@@ -116,6 +122,7 @@ const platformStates = {
   instagram: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
   tiktok: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
   spotify: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp3', quality: '320k', bundleMode: 'individual' },
+  custom: { url: '', loading: false, error: '', feedback: '', scan: null, selectedIds: new Set(), format: 'mp4', quality: 'best', bundleMode: 'individual' },
 };
 
 function formatSpeed(bytes) {
@@ -290,7 +297,8 @@ function renderMediaTab() {
   resultSubEl.textContent = subParts.join(' · ');
 
   const isMultiSlide =
-    (activeTab === 'instagram' || activeTab === 'tiktok') && scan.items.length > 1;
+    (activeTab === 'instagram' || activeTab === 'tiktok' || activeTab === 'custom') &&
+    scan.items.length > 1;
   const hasAnyVideo = scan.items.some((i) => i.kind === 'video');
   const isSpotify = activeTab === 'spotify';
   const isSpotifyCollection = isSpotify && scan.items.length > 1;
@@ -398,7 +406,7 @@ function switchTab(nextTab) {
     if (!st.url && activeTabUrl) {
       try {
         const host = new URL(activeTabUrl).hostname;
-        if (cfg.hostRe.test(host)) {
+        if (!cfg.hostRe || cfg.hostRe.test(host)) {
           st.url = activeTabUrl;
         }
       } catch {
@@ -475,14 +483,17 @@ async function handleDownloadMedia() {
   renderMediaTab();
 
   try {
-    const isMultiSlide =
-      (activeTab === 'instagram' || activeTab === 'tiktok') && st.scan.items.length > 1;
+    const hasAnyVideo = st.scan.items.some((i) => i.kind === 'video');
+    const showFormatOptions =
+      activeTab === 'spotify' ||
+      activeTab === 'youtube' ||
+      (hasAnyVideo && st.scan.items.length === 1);
     const payload = {
       platform: activeTab,
       url: st.scan.url,
       title: st.scan.title,
-      format: isMultiSlide ? undefined : st.format,
-      quality: isMultiSlide ? undefined : st.quality,
+      format: showFormatOptions ? st.format : undefined,
+      quality: showFormatOptions ? st.quality : undefined,
       bundleMode: activeTab === 'spotify' && st.scan.items.length > 1 ? st.bundleMode : undefined,
       items: chosen,
     };
@@ -527,7 +538,7 @@ async function init() {
       activeTabUrl = tab.url;
       const host = new URL(tab.url).hostname;
       for (const p of Object.keys(PLATFORM_CONFIG)) {
-        if (PLATFORM_CONFIG[p].hostRe.test(host)) {
+        if (PLATFORM_CONFIG[p].hostRe && PLATFORM_CONFIG[p].hostRe.test(host)) {
           platformStates[p].url = tab.url;
           switchTab(p);
           break;

@@ -520,6 +520,7 @@ export function formatSocialRequestSummary(req: SocialDownloadRequest): string {
     instagram: 'Instagram',
     tiktok: 'TikTok',
     spotify: 'Spotify',
+    custom: 'Custom URL',
   };
   const parts: string[] = [names[req.platform] || req.platform];
   if (req.format) {

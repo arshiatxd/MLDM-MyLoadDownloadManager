@@ -1153,13 +1153,15 @@ export class DownloadManager {
     const startPaused = Boolean(req.startPaused);
     let appliedFolderDefault = false;
 
-    if (req.platform === 'instagram' || req.platform === 'tiktok') {
+    if (req.platform === 'instagram' || req.platform === 'tiktok' || req.platform === 'custom') {
       const directSlides = req.items.filter((item) => isDirectHttpSlide(req, item));
       const toolItems = req.items.filter((item) => !isDirectHttpSlide(req, item));
       const referer =
         req.platform === 'instagram'
           ? 'https://www.instagram.com/'
-          : 'https://www.tiktok.com/';
+          : req.platform === 'tiktok'
+            ? 'https://www.tiktok.com/'
+            : req.url;
 
       for (const slide of directSlides) {
         const ext = slide.ext || (slide.kind === 'image' ? 'jpg' : 'mp4');

@@ -171,7 +171,9 @@ export function AddDownloadModal({
   const socialRequest = initialRequest?.socialRequest;
   const isMultiSlideSocial = Boolean(
     socialRequest &&
-      (socialRequest.platform === 'instagram' || socialRequest.platform === 'tiktok') &&
+      (socialRequest.platform === 'instagram' ||
+        socialRequest.platform === 'tiktok' ||
+        socialRequest.platform === 'custom') &&
       socialRequest.items.length > 1
   );
   const extractedSources = extractMultipleSources(source);

@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { isHttpUrl } from '../shared/constants';
 import type {
   SocialMediaItem,
@@ -5,7 +6,7 @@ import type {
   SocialScanResult,
 } from '../shared/types';
 
-const PLATFORM_HOSTS: Record<SocialPlatform, Set<string>> = {
+const PLATFORM_HOSTS: Record<Exclude<SocialPlatform, 'custom'>, Set<string>> = {
   youtube: new Set([
     'youtube.com',
     'www.youtube.com',
@@ -40,7 +41,77 @@ const PLATFORM_DISPLAY: Record<SocialPlatform, string> = {
   instagram: 'Instagram',
   tiktok: 'TikTok',
   spotify: 'Spotify',
+  custom: 'Custom URL',
 };
+
+function isPrivateIpv4Tuple(a: number, b: number): boolean {
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+export function isPrivateIpAddress(rawIp: string): boolean {
+  let ip = (rawIp || '').trim().toLowerCase();
+  const zoneIdx = ip.indexOf('%');
+  if (zoneIdx >= 0) ip = ip.slice(0, zoneIdx);
+  if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1);
+
+  if (net.isIPv4(ip)) {
+    const parts = ip.split('.').map(Number);
+    return parts.length !== 4 || isPrivateIpv4Tuple(parts[0], parts[1]);
+  }
+
+  if (net.isIPv6(ip)) {
+    if (ip === '::' || ip === '::1') return true;
+    const v4Mapped = ip.match(/^::ffff:(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (v4Mapped) {
+      return isPrivateIpv4Tuple(Number(v4Mapped[1]), Number(v4Mapped[2]));
+    }
+    const v4HexMapped = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (v4HexMapped) {
+      const hi = parseInt(v4HexMapped[1], 16);
+      return isPrivateIpv4Tuple((hi >> 8) & 0xff, hi & 0xff);
+    }
+    const firstWordMatch = ip.match(/^([0-9a-f]{1,4}):/);
+    if (firstWordMatch) {
+      const firstWord = parseInt(firstWordMatch[1], 16);
+      if ((firstWord & 0xfe00) === 0xfc00) return true;
+      if ((firstWord & 0xffc0) === 0xfe80) return true;
+      if ((firstWord & 0xff00) === 0xff00) return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+export function isPrivateOrLocalHost(hostname: string): boolean {
+  let clean = (hostname || '').trim().toLowerCase().replace(/\.+$/, '');
+  if (clean.startsWith('[') && clean.endsWith(']')) {
+    clean = clean.slice(1, -1);
+  }
+  if (!clean) return true;
+  if (
+    clean === 'localhost' ||
+    clean.endsWith('.localhost') ||
+    clean.endsWith('.local') ||
+    clean.endsWith('.internal') ||
+    clean.endsWith('.home.arpa')
+  ) {
+    return true;
+  }
+  if (net.isIP(clean)) {
+    return isPrivateIpAddress(clean);
+  }
+  if (!clean.includes('.')) {
+    return true;
+  }
+  return false;
+}
 
 export function validatePlatformUrl(
   platform: SocialPlatform,
@@ -57,6 +128,12 @@ export function validatePlatformUrl(
     return { valid: false, error: `Invalid ${PLATFORM_DISPLAY[platform]} URL.` };
   }
   const host = parsed.hostname.toLowerCase();
+  if (platform === 'custom') {
+    if (isPrivateOrLocalHost(host)) {
+      return { valid: false, error: 'Local and private network URLs cannot be scanned.' };
+    }
+    return { valid: true, normalizedUrl: parsed.toString() };
+  }
   if (!PLATFORM_HOSTS[platform]?.has(host)) {
     return {
       valid: false,
@@ -107,6 +184,10 @@ export function detectPrivateError(platform: SocialPlatform, text: string): stri
     }
   }
 
+  if (/drm protected|drm-protected|widevine|playready|fairplay|encrypted media/i.test(text)) {
+    return 'This media is DRM-protected and cannot be downloaded.';
+  }
+
   if (platform === 'spotify') {
     if (
       /private playlist|couldn't find that playlist|page not found|unavailable in your country|not found/i.test(
@@ -114,6 +195,23 @@ export function detectPrivateError(platform: SocialPlatform, text: string): stri
       )
     ) {
       return 'This Spotify track, album, or playlist is private or unavailable.';
+    }
+  }
+
+  if (platform === 'custom') {
+    if (
+      /cf-turnstile|challenges\.cloudflare\.com|class=["'][^"']*g-recaptcha[^"']*["']|data-sitekey[^>]+recaptcha|h-captcha|verify you are human|attention required!\s*\|\s*cloudflare/i.test(
+        text
+      )
+    ) {
+      return 'This page is protected by an anti-bot or CAPTCHA check and cannot be scanned automatically.';
+    }
+    if (
+      /login[_-]required|sign in to (?:view|watch|access|continue|download)|you must (?:be logged|log) in to|this (?:page|video|post|file|content|media) is private|members[- ]only/i.test(
+        text
+      )
+    ) {
+      return 'This page is private or requires login and cannot be scanned.';
     }
   }
 
@@ -772,7 +870,7 @@ export function parseTikTokRehydrationHtml(
 }
 
 export function normalizeYtDlpMetadata(
-  platform: 'youtube' | 'instagram' | 'tiktok',
+  platform: 'youtube' | 'instagram' | 'tiktok' | 'custom',
   raw: Record<string, unknown>,
   sourceUrl: string
 ): SocialScanResult {
@@ -828,7 +926,8 @@ export function normalizeYtDlpMetadata(
   }
 
   const singleExt = typeof raw.ext === 'string' ? raw.ext.toLowerCase() : 'mp4';
-  const singleIsImg = ['jpg', 'jpeg', 'png', 'webp'].includes(singleExt);
+  const singleIsImg = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'].includes(singleExt);
+  const singleIsAudio = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'opus'].includes(singleExt);
   const directMediaUrl =
     platform !== 'youtube' &&
     typeof raw.url === 'string' &&
@@ -840,7 +939,7 @@ export function normalizeYtDlpMetadata(
   return {
     ok: true,
     platform,
-    contentType: isYtMusic
+    contentType: isYtMusic || singleIsAudio
       ? 'music'
       : platform === 'instagram' && /\/reel\//i.test(sourceUrl)
         ? 'reel'
@@ -857,7 +956,7 @@ export function normalizeYtDlpMetadata(
       {
         id: String(raw.id || 'media-1'),
         index: 0,
-        kind: isYtMusic ? 'audio' : singleIsImg ? 'image' : 'video',
+        kind: isYtMusic || singleIsAudio ? 'audio' : singleIsImg ? 'image' : 'video',
         title: typeof raw.track === 'string' && raw.track.trim() ? raw.track.trim() : topTitle,
         artist: topAuthor,
         album: typeof raw.album === 'string' && raw.album.trim() ? raw.album.trim() : undefined,
@@ -865,9 +964,236 @@ export function normalizeYtDlpMetadata(
         thumbnailUrl: topThumb,
         mediaUrl: directMediaUrl,
         sourceUrl,
-        ext: isYtMusic ? 'mp3' : singleIsImg ? singleExt : 'mp4',
+        ext: isYtMusic ? 'mp3' : singleExt,
       },
     ],
+  };
+}
+
+const CUSTOM_VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'm4v']);
+const CUSTOM_AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'opus']);
+const CUSTOM_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif']);
+
+function extractAttr(tag: string, attrName: string): string | undefined {
+  const escaped = attrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = tag.match(new RegExp(`\\b${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  const val = m?.[1] ?? m?.[2] ?? m?.[3];
+  return val ? decodeHtmlEntities(val).trim() : undefined;
+}
+
+function resolvePublicMediaUrl(rawUrl: string, baseUrl: string): string | null {
+  let clean = unescapeJsonUrl(decodeHtmlEntities(rawUrl || '')).trim();
+  if (!clean || clean.startsWith('#') || /^(?:data|blob|javascript|mailto):/i.test(clean)) {
+    return null;
+  }
+  try {
+    const resolved = new URL(clean, baseUrl);
+    if (!isHttpUrl(resolved.toString())) return null;
+    if (isPrivateOrLocalHost(resolved.hostname)) return null;
+    return resolved.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getUrlExt(rawUrl: string): string {
+  try {
+    const pathname = new URL(rawUrl).pathname;
+    const base = pathname.split('/').pop() || '';
+    const dot = base.lastIndexOf('.');
+    return dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
+  } catch {
+    return '';
+  }
+}
+
+function deriveTitleFromMediaUrl(rawUrl: string, fallback: string): string {
+  try {
+    const pathname = new URL(rawUrl).pathname;
+    const leaf = decodeURIComponent(pathname.split('/').pop() || '').replace(/\.[^.]+$/, '').trim();
+    if (leaf && leaf.length >= 2) return leaf.slice(0, 120);
+  } catch {
+  }
+  return fallback;
+}
+
+function isNoiseImageUrl(rawUrl: string): boolean {
+  const lower = rawUrl.toLowerCase();
+  if (lower.endsWith('.ico') || lower.endsWith('.svg') || /\.ico[?#]|\.svg[?#]/i.test(lower)) {
+    return true;
+  }
+  return /favicon|sprite|spacer|1x1|pixel|blank\.gif|gravatar|doubleclick|googlesyndication|\/ads\//i.test(
+    lower
+  );
+}
+
+export function parseCustomPageHtml(html: string, pageUrl: string): SocialScanResult {
+  const privErr = detectPrivateError('custom', html);
+  if (privErr) {
+    return {
+      ok: false,
+      platform: 'custom',
+      contentType: 'post',
+      url: pageUrl,
+      title: 'Custom URL',
+      items: [],
+      isPrivate: true,
+      error: privErr,
+    };
+  }
+
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const pageTitle =
+    extractMetaTag(html, 'og:title') ||
+    (titleMatch?.[1] ? decodeHtmlEntities(titleMatch[1]).replace(/\s+/g, ' ').trim() : '') ||
+    'Scanned Page';
+  const posterThumb =
+    resolvePublicMediaUrl(
+      extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image') || '',
+      pageUrl
+    ) || undefined;
+
+  const items: SocialMediaItem[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (
+    kind: 'video' | 'image' | 'audio',
+    rawUrl: string | undefined,
+    opts?: { title?: string; thumb?: string; ext?: string; direct?: boolean }
+  ) => {
+    if (!rawUrl || items.length >= 60) return;
+    const resolved = resolvePublicMediaUrl(rawUrl, pageUrl);
+    if (!resolved || seen.has(resolved)) return;
+    if (kind === 'image' && isNoiseImageUrl(resolved)) return;
+    seen.add(resolved);
+
+    const extFromUrl = getUrlExt(resolved);
+    const defaultExt = kind === 'audio' ? 'mp3' : kind === 'image' ? 'jpg' : 'mp4';
+    const ext =
+      opts?.ext ||
+      (extFromUrl && (CUSTOM_VIDEO_EXTS.has(extFromUrl) || CUSTOM_AUDIO_EXTS.has(extFromUrl) || CUSTOM_IMAGE_EXTS.has(extFromUrl))
+        ? extFromUrl
+        : defaultExt);
+    const idx = items.length;
+    const labelPrefix = kind === 'audio' ? 'Audio' : kind === 'image' ? 'Image' : 'Video';
+    items.push({
+      id: `custom-${idx + 1}`,
+      index: idx,
+      kind,
+      title: (opts?.title?.trim() || deriveTitleFromMediaUrl(resolved, `${labelPrefix} ${idx + 1}`)).slice(0, 140),
+      thumbnailUrl: opts?.thumb || (kind === 'image' ? resolved : posterThumb),
+      mediaUrl: opts?.direct === false ? undefined : resolved,
+      sourceUrl: opts?.direct === false ? resolved : pageUrl,
+      ext,
+    });
+  };
+
+  for (const tagName of ['og:video', 'og:video:url', 'og:video:secure_url', 'twitter:player:stream']) {
+    const val = extractMetaTag(html, tagName);
+    if (val) pushCandidate('video', val, { direct: !/\.m3u8/i.test(val) });
+  }
+
+  for (const m of html.matchAll(/<(video|source|audio)\b[^>]*>/gi)) {
+    const tag = m[0];
+    const tagType = m[1].toLowerCase();
+    const src = extractAttr(tag, 'src') || extractAttr(tag, 'data-src');
+    if (!src) continue;
+    const mime = (extractAttr(tag, 'type') || '').toLowerCase();
+    const ext = getUrlExt(src);
+    const isHls = ext === 'm3u8' || /\.m3u8/i.test(src) || mime.includes('mpegurl');
+    const isAudio =
+      tagType === 'audio' || mime.startsWith('audio/') || CUSTOM_AUDIO_EXTS.has(ext);
+    const poster = extractAttr(tag, 'poster');
+    const resolvedPoster = poster ? resolvePublicMediaUrl(poster, pageUrl) || undefined : undefined;
+    pushCandidate(isAudio ? 'audio' : 'video', src, {
+      direct: !isHls,
+      thumb: resolvedPoster,
+      ext: isHls ? 'mp4' : undefined,
+    });
+  }
+
+  for (const tagName of ['og:audio', 'og:audio:url', 'og:audio:secure_url']) {
+    const val = extractMetaTag(html, tagName);
+    if (val) pushCandidate('audio', val);
+  }
+
+  for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attrs = m[1] || '';
+    const href = extractAttr(`<a ${attrs}>`, 'href');
+    if (!href) continue;
+    const resolved = resolvePublicMediaUrl(href, pageUrl);
+    if (!resolved) continue;
+    const ext = getUrlExt(resolved);
+    const labelText = decodeHtmlEntities((m[2] || '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+    if (CUSTOM_VIDEO_EXTS.has(ext)) {
+      pushCandidate('video', resolved, { title: labelText || undefined, ext });
+    } else if (CUSTOM_AUDIO_EXTS.has(ext)) {
+      pushCandidate('audio', resolved, { title: labelText || undefined, ext });
+    } else if (CUSTOM_IMAGE_EXTS.has(ext)) {
+      pushCandidate('image', resolved, { title: labelText || undefined, ext });
+    }
+  }
+
+  for (const m of html.matchAll(
+    /(https?:\\?\/\\?\/[^"'\\\s<>]+?\.(?:mp4|webm|m4v|mov|mp3|wav|m4a|flac|ogg|opus|m3u8)(?:\?[^"'\\\s<>]*)?)/gi
+  )) {
+    const candidate = m[1];
+    const ext = getUrlExt(unescapeJsonUrl(candidate));
+    if (ext === 'm3u8') {
+      pushCandidate('video', candidate, { direct: false, ext: 'mp4' });
+    } else if (CUSTOM_AUDIO_EXTS.has(ext)) {
+      pushCandidate('audio', candidate, { ext });
+    } else {
+      pushCandidate('video', candidate, { ext });
+    }
+  }
+
+  if (posterThumb) {
+    pushCandidate('image', posterThumb);
+  }
+
+  for (const m of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    const src = extractAttr(tag, 'data-src') || extractAttr(tag, 'src');
+    if (!src) continue;
+    const w = Number(extractAttr(tag, 'width') || '');
+    const h = Number(extractAttr(tag, 'height') || '');
+    if ((Number.isFinite(w) && w > 0 && w < 64) || (Number.isFinite(h) && h > 0 && h < 64)) {
+      continue;
+    }
+    const alt = extractAttr(tag, 'alt');
+    pushCandidate('image', src, { title: alt || undefined });
+  }
+
+  if (items.length === 0) {
+    return {
+      ok: false,
+      platform: 'custom',
+      contentType: 'post',
+      url: pageUrl,
+      title: pageTitle,
+      items: [],
+      error: 'No downloadable public media was found on this page.',
+    };
+  }
+
+  const contentType: SocialScanResult['contentType'] =
+    items.length > 1
+      ? 'carousel'
+      : items[0].kind === 'video'
+        ? 'video'
+        : items[0].kind === 'audio'
+          ? 'music'
+          : 'post';
+
+  return {
+    ok: true,
+    platform: 'custom',
+    contentType,
+    url: pageUrl,
+    title: pageTitle,
+    thumbnailUrl: posterThumb || items.find((i) => i.thumbnailUrl)?.thumbnailUrl,
+    items,
   };
 }
 

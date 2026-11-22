@@ -1,6 +1,6 @@
 export type DownloadKind = 'http' | 'torrent' | 'media';
 
-export type SocialPlatform = 'youtube' | 'instagram' | 'tiktok' | 'spotify';
+export type SocialPlatform = 'youtube' | 'instagram' | 'tiktok' | 'spotify' | 'custom';
 export type MediaOutputFormat =
   | 'mp4'
   | 'mkv'

@@ -8,6 +8,7 @@ import { LogManager } from '../src/main/logger';
 import {
   detectPrivateError,
   normalizeYtDlpMetadata,
+  parseCustomPageHtml,
   parseInstagramEmbedHtml,
   parseSpotifyEmbedHtml,
   parseTikTokRehydrationHtml,
@@ -418,6 +419,80 @@ describe('BrowserBridgeServer media endpoints', () => {
     const dlJson = (await dlOk.json()) as { ok: boolean; count: number };
     expect(dlJson).toEqual({ ok: true, count: 1 });
     expect(downloadMock).toHaveBeenCalledTimes(1);
+
+    const customScan = await fetch(`http://127.0.0.1:${port}/api/v1/media/scan`, {
+      method: 'POST',
+      headers: EXT_HEADERS,
+      body: JSON.stringify({ platform: 'custom', url: 'https://example.org/showcase' }),
+    });
+    expect(customScan.status).toBe(200);
+    expect(scanMock).toHaveBeenCalledWith('custom', 'https://example.org/showcase');
+  });
+});
+
+describe('custom URL scanner', () => {
+  it('validates custom URLs and blocks loopback or private network hosts', () => {
+    expect(validatePlatformUrl('custom', 'https://media.example.org/watch/clip').valid).toBe(true);
+    expect(validatePlatformUrl('custom', 'http://localhost:8080/video').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'http://127.0.0.1:49173/health').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'http://192.168.1.5/nas.mp4').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'http://169.254.169.254/latest/meta-data').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'http://[::1]/local').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'http://[::ffff:127.0.0.1]/local').valid).toBe(false);
+    expect(validatePlatformUrl('custom', 'file:///C:/secret.mp4').valid).toBe(false);
+  });
+
+  it('detects DRM, CAPTCHA, and login walls on custom URLs', () => {
+    expect(detectPrivateError('custom', 'Error: This video is DRM protected (Widevine)')).toContain(
+      'DRM-protected'
+    );
+    expect(
+      detectPrivateError('custom', '<div class="cf-turnstile" data-sitekey="abc"></div>')
+    ).toContain('CAPTCHA');
+    expect(
+      detectPrivateError('custom', 'Please sign in to access this private collection')
+    ).toContain('private');
+  });
+
+  it('extracts public video, audio, direct links, and images while filtering noise', () => {
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <title>Indie Film Preview</title>
+          <link rel="icon" href="/favicon.ico" />
+          <meta property="og:video" content="https://cdn.example.org/videos/hero-trailer.mp4" />
+        </head>
+        <body>
+          <video controls>
+            <source src="/media/behind-scenes.webm" type="video/webm" />
+            <source src="https://cdn.example.org/videos/hero-trailer.mp4" type="video/mp4" />
+          </video>
+          <audio src="https://cdn.example.org/audio/soundtrack.mp3"></audio>
+          <a href="/downloads/bonus-track.flac">Bonus Track FLAC</a>
+          <img src="/assets/poster-wide.jpg" alt="Main Poster" width="1280" height="720" />
+          <img src="data:image/png;base64,AAA" width="32" height="32" />
+          <img src="/assets/logo-tiny.png" width="24" height="24" />
+        </body>
+      </html>
+    `;
+
+    const res = parseCustomPageHtml(html, 'https://example.org/projects/indie-film');
+    expect(res.ok).toBe(true);
+    expect(res.platform).toBe('custom');
+    expect(res.title).toBe('Indie Film Preview');
+    const urls = res.items.map((it) => it.mediaUrl);
+    expect(urls).toContain('https://cdn.example.org/videos/hero-trailer.mp4');
+    expect(urls).toContain('https://example.org/media/behind-scenes.webm');
+    expect(urls).toContain('https://cdn.example.org/audio/soundtrack.mp3');
+    expect(urls).toContain('https://example.org/downloads/bonus-track.flac');
+    expect(urls).toContain('https://example.org/assets/poster-wide.jpg');
+    expect(urls.filter((u) => u === 'https://cdn.example.org/videos/hero-trailer.mp4')).toHaveLength(
+      1
+    );
+    expect(urls.some((u) => u?.includes('favicon') || u?.startsWith('data:') || u?.includes('logo-tiny'))).toBe(
+      false
+    );
   });
 });
 

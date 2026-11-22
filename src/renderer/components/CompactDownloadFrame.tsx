@@ -247,7 +247,9 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   const torrentFiles = probe?.files ?? [];
   const isMultiSlideSocial = Boolean(
     socialRequest &&
-      (socialRequest.platform === 'instagram' || socialRequest.platform === 'tiktok') &&
+      (socialRequest.platform === 'instagram' ||
+        socialRequest.platform === 'tiktok' ||
+        socialRequest.platform === 'custom') &&
       socialRequest.items.length > 1
   );
 

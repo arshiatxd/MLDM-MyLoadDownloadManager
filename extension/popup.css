@@ -78,9 +78,9 @@ body {
 }
 
 .tab-bar {
-  display: flex;
-  align-items: center;
-  gap: 3px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
   background: #1a1a1f;
   border: 1px solid #2b2b34;
   border-radius: 10px;
@@ -88,7 +88,6 @@ body {
 }
 
 .tab-btn {
-  flex: 1 1 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -129,6 +128,10 @@ body {
 
 .tab-btn.active .yt-play {
   fill: #d91b36;
+}
+
+.tab-btn.active .custom-stroke {
+  stroke: #ffffff;
 }
 
 .panel {

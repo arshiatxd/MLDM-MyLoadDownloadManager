@@ -78,8 +78,8 @@ export function PrivacyPolicyModal({ open, onClose }: PrivacyPolicyModalProps) {
               using extension-origin verification. For authenticated downloads, site cookies and referrer
               headers are held strictly in memory for the active transfer, automatically stripped on
               cross-host redirects, never logged, and never written to disk. Extension media tabs
-              (YouTube, Instagram, TikTok, Spotify) scan only public URLs you explicitly submit and
-              never bypass private accounts or login walls.
+              (YouTube, Instagram, TikTok, Spotify, and Custom URL) scan only public URLs you
+              explicitly submit and never bypass private accounts, login walls, DRM, or CAPTCHA checks.
             </p>
           </section>
 

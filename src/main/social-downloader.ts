@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -16,7 +17,10 @@ import type { LogManager } from './logger';
 import { ensureYtDlp, findFfmpeg, runProcess } from './media-tools';
 import {
   detectPrivateError,
+  isPrivateIpAddress,
+  isPrivateOrLocalHost,
   normalizeYtDlpMetadata,
+  parseCustomPageHtml,
   parseInstagramEmbedHtml,
   parseSpotifyEmbedHtml,
   parseTikTokRehydrationHtml,
@@ -48,12 +52,40 @@ function parseEtaText(eta: string): number | null {
   return null;
 }
 
-function fetchHttpText(
+async function assertPublicUrl(rawUrl: string): Promise<void> {
+  if (!isHttpUrl(rawUrl)) {
+    throw new Error('Invalid HTTP URL');
+  }
+  const parsed = new URL(rawUrl);
+  if (isPrivateOrLocalHost(parsed.hostname)) {
+    throw new Error('Local and private network URLs cannot be scanned.');
+  }
+  let records: Array<{ address: string }>;
+  try {
+    records = await dns.lookup(parsed.hostname, { all: true });
+  } catch {
+    throw new Error(`Unable to resolve host ${parsed.hostname}`);
+  }
+  if (!records || records.length === 0) {
+    throw new Error(`Unable to resolve host ${parsed.hostname}`);
+  }
+  for (const rec of records) {
+    if (isPrivateIpAddress(rec.address)) {
+      throw new Error('Local and private network URLs cannot be scanned.');
+    }
+  }
+}
+
+async function fetchHttpText(
   rawUrl: string,
-  redirectsLeft = 5
+  redirectsLeft = 5,
+  enforcePublic = false
 ): Promise<{ statusCode: number; finalUrl: string; body: string }> {
   if (!isHttpUrl(rawUrl)) {
     return Promise.reject(new Error('Invalid HTTP URL'));
+  }
+  if (enforcePublic) {
+    await assertPublicUrl(rawUrl);
   }
 
   return new Promise((resolve, reject) => {
@@ -75,7 +107,7 @@ function fetchHttpText(
         if (code >= 300 && code < 400 && res.headers.location && redirectsLeft > 0) {
           res.resume();
           const next = new URL(res.headers.location, parsed).toString();
-          void fetchHttpText(next, redirectsLeft - 1).then(resolve, reject);
+          void fetchHttpText(next, redirectsLeft - 1, enforcePublic).then(resolve, reject);
           return;
         }
         const chunks: Buffer[] = [];
@@ -219,6 +251,7 @@ export class SocialMediaDownloader {
     if (platform === 'spotify') return this.scanSpotify(url);
     if (platform === 'instagram') return this.scanInstagram(url);
     if (platform === 'tiktok') return this.scanTikTok(url);
+    if (platform === 'custom') return this.scanCustomUrl(url);
     return this.scanYouTube(url);
   }
 
@@ -383,8 +416,91 @@ export class SocialMediaDownloader {
     return this.runYtDlpScan('youtube', rawUrl);
   }
 
+  private async scanCustomUrl(rawUrl: string): Promise<SocialScanResult> {
+    try {
+      await assertPublicUrl(rawUrl);
+    } catch (err) {
+      return {
+        ok: false,
+        platform: 'custom',
+        contentType: 'post',
+        url: rawUrl,
+        title: 'Custom URL',
+        items: [],
+        error: err instanceof Error ? err.message : 'Local and private network URLs cannot be scanned.',
+      };
+    }
+
+    const directExtMatch = new URL(rawUrl).pathname
+      .toLowerCase()
+      .match(/\.(mp4|webm|mkv|mov|m4v|mp3|wav|m4a|flac|ogg|opus|jpg|jpeg|png|webp|gif|avif)$/);
+    if (directExtMatch) {
+      const ext = directExtMatch[1];
+      const isAudio = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'opus'].includes(ext);
+      const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'].includes(ext);
+      const leaf = decodeURIComponent(new URL(rawUrl).pathname.split('/').pop() || 'media').replace(
+        /\.[^.]+$/,
+        ''
+      );
+      const kind: SocialMediaItem['kind'] = isAudio ? 'audio' : isImage ? 'image' : 'video';
+      return {
+        ok: true,
+        platform: 'custom',
+        contentType: isAudio ? 'music' : isImage ? 'post' : 'video',
+        url: rawUrl,
+        title: leaf || 'Direct Media',
+        thumbnailUrl: isImage ? rawUrl : undefined,
+        items: [
+          {
+            id: 'custom-1',
+            index: 0,
+            kind,
+            title: leaf || 'Direct Media',
+            thumbnailUrl: isImage ? rawUrl : undefined,
+            mediaUrl: rawUrl,
+            sourceUrl: rawUrl,
+            ext,
+          },
+        ],
+      };
+    }
+
+    const ytRes = await this.runYtDlpScan('custom', rawUrl);
+    if (ytRes.isPrivate || (ytRes.ok && ytRes.items.length > 0)) {
+      return ytRes;
+    }
+
+    try {
+      const pageRes = await fetchHttpText(rawUrl, 5, true);
+      const finalUrl = pageRes.finalUrl || rawUrl;
+      if (pageRes.statusCode === 401 || pageRes.statusCode === 403) {
+        return {
+          ok: false,
+          platform: 'custom',
+          contentType: 'post',
+          url: finalUrl,
+          title: 'Custom URL',
+          items: [],
+          isPrivate: true,
+          error: 'This page requires authentication or access permission and cannot be scanned.',
+        };
+      }
+      return parseCustomPageHtml(pageRes.body, finalUrl);
+    } catch (err) {
+      return {
+        ok: false,
+        platform: 'custom',
+        contentType: 'post',
+        url: rawUrl,
+        title: 'Custom URL',
+        items: [],
+        error: err instanceof Error ? err.message : 'Unable to scan page URL.',
+      };
+    }
+  }
+
   private async runYtDlpScan(
-    platform: 'youtube' | 'instagram' | 'tiktok',
+    platform: 'youtube' | 'instagram' | 'tiktok' | 'custom',
     url: string
   ): Promise<SocialScanResult> {
     try {
@@ -851,7 +967,12 @@ export function deriveSocialPrimaryItemName(req: SocialDownloadRequest): string 
     const imgExt = first.ext || 'jpg';
     return sanitizeFileName(`${first.title || req.title || 'image'}.${imgExt}`);
   }
-  return sanitizeFileName(`${first?.title || req.title || 'media'}.${format}`);
+  if (first?.kind === 'audio' && !req.format) {
+    const audExt = first.ext || 'mp3';
+    return sanitizeFileName(`${first.title || req.title || 'audio'}.${audExt}`);
+  }
+  const vidExt = req.format || first?.ext || 'mp4';
+  return sanitizeFileName(`${first?.title || req.title || 'media'}.${vidExt}`);
 }
 
 export function isDirectHttpSlide(
@@ -862,6 +983,18 @@ export function isDirectHttpSlide(
   if (req.platform === 'instagram' || req.platform === 'tiktok') {
     if (item.kind === 'image') return true;
     if (req.platform === 'instagram' && item.kind === 'video' && (!req.format || req.format === 'mp4')) {
+      return true;
+    }
+  }
+  if (req.platform === 'custom') {
+    if (item.kind === 'image') return true;
+    if (item.kind === 'audio' && (!req.format || req.format === (item.ext || 'mp3'))) {
+      return true;
+    }
+    if (
+      item.kind === 'video' &&
+      (req.items.length > 1 || !req.format || req.format === (item.ext || 'mp4'))
+    ) {
       return true;
     }
   }

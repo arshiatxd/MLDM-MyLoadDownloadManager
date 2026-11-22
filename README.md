@@ -12,8 +12,6 @@
 
 An open-source, local-first desktop download manager for **HTTP/HTTPS** files and **BitTorrent** magnets/`.torrent` files, built with Electron, React, TypeScript, and Tailwind CSS.
 
-Repository: <https://github.com/arshiatxd/MLDM-MyLoadDownloadManager>
-
 ---
 
 ## Key Features

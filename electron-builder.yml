@@ -1,0 +1,63 @@
+appId: com.myload.app
+productName: MyLoad
+copyright: Copyright © 2026 arshiatxd & MyLoad Contributors
+compression: maximum
+electronLanguages:
+  - en-US
+afterPack: scripts/after-pack.mjs
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - build/icon.png
+  - build/tray-icon.png
+  - build/icon.ico
+  - "!dist/**/*.map"
+  - "!node_modules/node-datachannel/**"
+  - "!node_modules/webrtc-polyfill/**"
+  - "!node_modules/web-streams-polyfill/**"
+  - "!node_modules/webtorrent/dist/**"
+  - "!node_modules/xml2js/lib/xml2js.bc.js"
+  - "!node_modules/**/*.map"
+  - "!node_modules/**/*.bare"
+  - "!node_modules/**/*.d.ts"
+  - "!node_modules/**/*.{cpp,cc,c,h,hpp,md,markdown,gyp,gypi}"
+  - "!node_modules/**/prebuilds/{darwin-*,linux-*,ios-*,android-*,win32-ia32,win32-arm64}/**"
+  - "!node_modules/**/{test,tests,__tests__,example,examples,docs,doc,deps,.github}/**"
+  - package.json
+asarUnpack:
+  - build/**
+  - "**/*.node"
+extraResources:
+  - from: extension
+    to: extension
+npmRebuild: false
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MyLoad
+  uninstallDisplayName: MyLoad 1.0.0
+  license: build/license.txt
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+  artifactName: MyLoad-Installer-${version}-x64.${ext}
+portable:
+  artifactName: MyLoad-Portable-${version}-${arch}.${ext}

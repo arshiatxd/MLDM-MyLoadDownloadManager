@@ -1,0 +1,59 @@
+{
+  "name": "myload",
+  "version": "1.0.0",
+  "description": "MyLoad — Modern HTTP/HTTPS and BitTorrent Download Manager",
+  "main": "dist/main/index.mjs",
+  "type": "module",
+  "author": "arshiatxd",
+  "license": "MIT",
+  "homepage": "https://github.com/arshiatxd/MLDM-MyLoadDownloadManager#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arshiatxd/MLDM-MyLoadDownloadManager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/issues"
+  },
+  "keywords": [
+    "download-manager",
+    "electron",
+    "bittorrent",
+    "webtorrent",
+    "http-downloader",
+    "windows",
+    "open-source",
+    "myload"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:electron && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "generate:icon": "node scripts/generate-icon.mjs",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "parse-torrent": "^11.0.24",
+    "webtorrent": "^3.0.21"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "create-torrent": "^6.1.3",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "lucide-react": "^1.77.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,0 +1,63 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import createTorrent from 'create-torrent';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { probeTorrentSource } from '../src/main/torrent-engine';
+
+describe('torrent probing', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'myload-torrent-test-'));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('probes a local multi-file .torrent file and extracts files, trackers, and size', async () => {
+    const contentDir = path.join(tmpDir, 'sample-release');
+    await fs.promises.mkdir(contentDir, { recursive: true });
+    await fs.promises.writeFile(path.join(contentDir, 'readme.txt'), 'hello myload');
+    await fs.promises.writeFile(path.join(contentDir, 'photo.png'), Buffer.alloc(2048, 7));
+
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        contentDir,
+        {
+          name: 'sample-release',
+          announceList: [['udp://tracker.example.com:80/announce']],
+        },
+        (err: Error | null, torrent: Buffer) => {
+          if (err) reject(err);
+          else resolve(torrent);
+        }
+      );
+    });
+
+    const torrentPath = path.join(tmpDir, 'sample-release.torrent');
+    await fs.promises.writeFile(torrentPath, torrentBuf);
+
+    const probe = await probeTorrentSource(torrentPath);
+    expect(probe.kind).toBe('torrent');
+    expect(probe.category).toBe('torrents');
+    expect(probe.fileName).toBe('sample-release');
+    expect(probe.infoHash).toMatch(/^[a-f0-9]{40}$/i);
+    expect(probe.totalBytes).toBe(12 + 2048);
+    expect(probe.files?.length).toBe(2);
+    expect(probe.trackers).toContain('udp://tracker.example.com:80/announce');
+  });
+
+  it('probes magnet URIs cleanly', async () => {
+    const magnet =
+      'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Ubuntu%20ISO&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337';
+    const probe = await probeTorrentSource(magnet);
+    expect(probe.kind).toBe('torrent');
+    expect(probe.fileName).toBe('Ubuntu ISO');
+    expect(probe.infoHash).toBe('0123456789abcdef0123456789abcdef01234567');
+    expect(probe.totalBytes).toBeNull();
+    expect(probe.trackers?.length).toBeGreaterThanOrEqual(1);
+  });
+});
+

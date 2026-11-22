@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyLoad Browser Integration</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <div class="brand">
+          <img src="icons/icon32.png" alt="MyLoad" width="22" height="22" />
+          <h1>MyLoad</h1>
+        </div>
+        <span id="status-pill" class="pill pill-muted">Checking...</span>
+      </header>
+
+      <section class="card">
+        <label class="toggle-row">
+          <div>
+            <div class="toggle-title">Auto-intercept downloads</div>
+            <div class="toggle-sub">Catch browser clicks in MyLoad automatically</div>
+          </div>
+          <input id="enabled-toggle" type="checkbox" />
+        </label>
+      </section>
+
+      <div class="actions">
+        <button id="focus-btn" type="button" class="btn-primary">Open MyLoad</button>
+        <button id="refresh-btn" type="button" class="btn-secondary">Retry</button>
+      </div>
+
+      <section class="settings-section">
+        <h2>Bridge Settings</h2>
+
+        <label class="field">
+          <span>Minimum file size to intercept (KB, 0 = all)</span>
+          <input id="min-size-input" type="number" min="0" step="1" />
+        </label>
+
+        <label class="field">
+          <span>Excluded domains (one per line)</span>
+          <textarea
+            id="excluded-domains-input"
+            rows="3"
+            placeholder="example.com&#10;intranet.local"
+          ></textarea>
+        </label>
+
+        <label class="field">
+          <span>Local bridge port</span>
+          <input id="port-input" type="number" min="1024" max="65535" />
+        </label>
+
+        <div id="save-hint" class="save-hint" aria-live="polite"></div>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

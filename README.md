@@ -20,7 +20,7 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 - **BitTorrent Support (WebTorrent)** — Download magnet links or local `.torrent` files with selective file picking inside the Inspector or Add Download modal.
 - **Per-File-Type Download Folders** — Keep all downloads in one default folder or switch to category-specific folders (**Videos**, **Images**, **Documents**, **Archives**, **Torrents**, **Other Files**) with live disk-space validation.
 - **Compact Download Frame & Auto-Download** — Browser interceptions open a compact floating frame instead of forcing the main window open, with an optional **Auto-download on click** toggle in Preferences.
-- **Passive Clipboard Link Recognition** — Silently remembers your last copied downloadable link (`.zip`, `.rar`, `.exe`, `.mp4`, `magnet:?`, release assets, etc.) and auto-fills **Add Download** when opened manually — never opens surprise popups on copy.
+- **Passive Clipboard Link Recognition** — Silently remembers your last copied downloadable link (`.zip`, `.rar`, `.exe`, `.mp4`, `magnet:?`, release assets, etc.) and auto-fills **Add Download** when opened manually.
 - **Multi-Part Archive Scanner** — Detects split archives (`.part01.rar`, `.001`, `.r00`, `.z01`, etc.) and asks whether to queue all parts together (with `"Don't ask again"` settings control).
 - **Flexible Batch Queues** — Queue multiple URLs or multi-part downloads in **Parallel**, **Sequential (Finish → Next)**, or **Equal Bandwidth Split** mode.
 - **Gaming / Surfing Mode** — Continuously monitors RTT latency jitter and balances concurrency/speed limits to prevent lag spikes during online gaming, streaming, or browsing.

@@ -397,7 +397,8 @@ export function isHttpUrl(input: string): boolean {
 }
 
 export function isTorrentFilePath(input: string): boolean {
-  return /\.torrent$/i.test(input.trim());
+  const trimmed = input.trim();
+  return !isHttpUrl(trimmed) && !isMagnetUri(trimmed) && /\.torrent$/i.test(trimmed);
 }
 
 export function extractMultipleSources(text: string): string[] {

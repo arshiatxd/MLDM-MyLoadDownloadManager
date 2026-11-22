@@ -327,5 +327,76 @@ describe('DownloadManager priority & custom order batch execution', () => {
       'part3.bin',
     ]);
   });
+
+  it('respects reorderDownloads and setDownloadPriority changes in sequential execution', async () => {
+    const payloads = {
+      '/a.bin': Buffer.alloc(4096, 0x41),
+      '/b.bin': Buffer.alloc(4096, 0x42),
+      '/c.bin': Buffer.alloc(4096, 0x43),
+    };
+    const { urlBase, server } = await startPayloadServer(payloads);
+    servers.push(server);
+
+    const completedOrder: string[] = [];
+    const manager = new DownloadManager({
+      stateFilePath: path.join(tmpDir, 'state-reorder.json'),
+      logFilePath: null,
+      defaultDownloadDir: tmpDir,
+      enableBridge: false,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => {},
+        executeSystemAction: async () => {},
+      },
+      callbacks: {
+        onDownloadsUpdated: (items) => {
+          for (const item of items) {
+            if (item.status === 'completed' && !completedOrder.includes(item.name)) {
+              completedOrder.push(item.name);
+            }
+          }
+        },
+      },
+    });
+    managers.push(manager);
+    manager.start();
+
+    await manager.updateSettings({
+      maxConcurrentDownloads: 1,
+      httpConnections: 1,
+      queueMode: 'sequential',
+    });
+
+    const a = await manager.addDownload({
+      source: `${urlBase}/a.bin`,
+      saveDir: tmpDir,
+      fileName: 'a.bin',
+      startPaused: true,
+    });
+    const b = await manager.addDownload({
+      source: `${urlBase}/b.bin`,
+      saveDir: tmpDir,
+      fileName: 'b.bin',
+      startPaused: true,
+    });
+    const c = await manager.addDownload({
+      source: `${urlBase}/c.bin`,
+      saveDir: tmpDir,
+      fileName: 'c.bin',
+      startPaused: true,
+    });
+
+    manager.reorderDownloads([b.id, a.id, c.id]);
+    manager.setDownloadPriority(c.id, 'high');
+
+    await manager.resumeAll();
+
+    const deadline = Date.now() + 10000;
+    while (completedOrder.length < 3 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(completedOrder).toEqual(['c.bin', 'b.bin', 'a.bin']);
+  });
 });
 

@@ -4,6 +4,7 @@ import type {
   AppSettings,
   BrowserInterceptPayload,
   DownloadItem,
+  DownloadPriority,
   DownloadSchedule,
   GlobalStats,
   LogEntry,
@@ -63,6 +64,10 @@ const api: MyLoadApi = {
     ipcRenderer.invoke('myload:update-torrent-files', id, selectedIndices),
   updateDownloadSchedule: (id: string, schedule: DownloadSchedule | null) =>
     ipcRenderer.invoke('myload:update-download-schedule', id, schedule),
+  setDownloadPriority: (id: string, priority: DownloadPriority) =>
+    ipcRenderer.invoke('myload:set-priority', id, priority),
+  reorderDownloads: (orderedIds: string[]) =>
+    ipcRenderer.invoke('myload:reorder-downloads', orderedIds),
   updateSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.invoke('myload:update-settings', patch),
   resetSettings: () => ipcRenderer.invoke('myload:reset-settings'),

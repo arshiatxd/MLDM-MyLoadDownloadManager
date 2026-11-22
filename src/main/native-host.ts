@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 export const NATIVE_HOST_NAME = 'com.myload.host';
+export const MYLOAD_PROTOCOL = 'myload';
 export const DEFAULT_EXTENSION_ID = 'cbnkknogojpgeikfeaploefenabcgiai';
 export const BRIDGE_PORT_CANDIDATES = [
   49173,
@@ -30,7 +31,17 @@ const WINDOWS_NATIVE_HOST_REG_KEYS = [
   `HKCU\\Software\\Chromium\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
   `HKCU\\Software\\Vivaldi\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
   `HKCU\\Software\\Opera Software\\Opera Stable\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
+  `HKCU\\Software\\Opera Software\\Opera GX Stable\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
+  `HKCU\\Software\\Yandex\\YandexBrowser\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
 ];
+
+export function buildWindowsProtocolRegistryArgs(launchExe: string): string[][] {
+  return [
+    ['add', `HKCU\\Software\\Classes\\${MYLOAD_PROTOCOL}`, '/ve', '/t', 'REG_SZ', '/d', 'URL:MyLoad Protocol', '/f'],
+    ['add', `HKCU\\Software\\Classes\\${MYLOAD_PROTOCOL}`, '/v', 'URL Protocol', '/t', 'REG_SZ', '/d', '', '/f'],
+    ['add', `HKCU\\Software\\Classes\\${MYLOAD_PROTOCOL}\\shell\\open\\command`, '/ve', '/t', 'REG_SZ', '/d', `"${launchExe}" "%1"`, '/f'],
+  ];
+}
 
 export function encodeNativeMessage(payload: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(payload), 'utf-8');
@@ -234,6 +245,12 @@ export async function ensureNativeMessagingHostRegistered(opts: {
       } catch {
       }
     }
+    for (const cmdArgs of buildWindowsProtocolRegistryArgs(launchExe)) {
+      try {
+        await execFileAsync('reg.exe', cmdArgs, { windowsHide: true });
+      } catch {
+      }
+    }
   }
 
   return { manifestPath, wrapperPath, allowedOrigins };
@@ -359,9 +376,26 @@ export async function runNativeHostBridge(opts: {
     return;
   }
 
+  let fallbackLaunched = false;
+  const launchViaExplorer = (target: string) => {
+    const child = spawn('explorer.exe', [target], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+  };
+
   const launch =
     opts.launchApp ??
     ((wantMainFocus: boolean) => {
+      if (process.platform === 'win32') {
+        const protocolUri = wantMainFocus
+          ? `${MYLOAD_PROTOCOL}://focus`
+          : `${MYLOAD_PROTOCOL}://background`;
+        launchViaExplorer(protocolUri);
+        return;
+      }
       const args = wantMainFocus ? [] : ['--background-launch'];
       const childEnv = { ...process.env };
       delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -375,13 +409,23 @@ export async function runNativeHostBridge(opts: {
 
   launch(focusMain);
 
-  const deadline = Date.now() + waitTimeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + waitTimeoutMs;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 200));
     const readyPort = await findHealthyPort();
     if (readyPort !== null) {
       await writeFramed(stdout, { ok: true, port: readyPort, launched: true });
       return;
+    }
+    if (
+      !opts.launchApp &&
+      process.platform === 'win32' &&
+      !fallbackLaunched &&
+      Date.now() - startedAt >= 3500
+    ) {
+      fallbackLaunched = true;
+      launchViaExplorer(opts.executablePath);
     }
   }
 

@@ -24,7 +24,48 @@ const REQUEST_TIMEOUT_MS = 20000;
 const WRITE_BUFFER_BYTES = 128 * 1024;
 const WRITE_FLUSH_INTERVAL_MS = 120;
 const MAX_HTTP_CONNECTIONS = 32;
-const USER_AGENT = 'MyLoad/1.0 (Windows NT; Download Manager)';
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+
+export interface HttpProbeResponse {
+  finalUrl: string;
+  statusCode: number;
+  headers: http.IncomingHttpHeaders;
+}
+
+export interface HttpStreamResponse {
+  statusCode: number;
+  headers: http.IncomingHttpHeaders;
+  stream: AsyncIterable<Buffer | string>;
+  destroy: () => void;
+}
+
+export interface ElectronNetAdapter {
+  probe: (
+    url: string,
+    headers: Record<string, string>
+  ) => Promise<HttpProbeResponse>;
+  openStream: (
+    url: string,
+    headers: Record<string, string>,
+    signal: AbortSignal
+  ) => Promise<HttpStreamResponse>;
+  fetchBuffer: (
+    url: string,
+    headers: Record<string, string>,
+    maxBytes: number
+  ) => Promise<{ buffer: Buffer; finalUrl: string; headers: http.IncomingHttpHeaders }>;
+}
+
+export function buildBrowserHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    'User-Agent': USER_AGENT,
+    Accept: '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'identity',
+    ...extra,
+  };
+}
 
 const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -60,18 +101,26 @@ interface ActiveTask {
   controller: AbortController;
   requests: Set<http.ClientRequest>;
   stoppedByUser: boolean;
+  useElectronNet: boolean;
 }
 
 export class HttpDownloadEngine {
   private readonly throttle: TokenBucket;
   private readonly logger: LogManager;
+  private readonly electronNet?: ElectronNetAdapter;
+  private readonly electronNetPreferredUrls = new Set<string>();
   private readonly activeTasks = new Map<string, ActiveTask>();
   private readonly httpAgent = new http.Agent({ keepAlive: false, maxSockets: 128 });
   private readonly httpsAgent = new https.Agent({ keepAlive: false, maxSockets: 128 });
 
-  constructor(throttle: TokenBucket, logger: LogManager) {
+  constructor(
+    throttle: TokenBucket,
+    logger: LogManager,
+    opts?: { electronNet?: ElectronNetAdapter }
+  ) {
     this.throttle = throttle;
     this.logger = logger;
+    this.electronNet = opts?.electronNet;
   }
 
   async probeUrl(
@@ -80,11 +129,7 @@ export class HttpDownloadEngine {
   ): Promise<ProbeResult> {
     const parsed = validateHttpOrHttpsUrl(rawUrl);
     const probeBaseHeaders = sanitizeOutgoingHeaders(requestHeaders);
-    let headResult: {
-      finalUrl: string;
-      statusCode: number;
-      headers: http.IncomingHttpHeaders;
-    } | null = null;
+    let headResult: HttpProbeResponse | null = null;
 
     try {
       headResult = await this.performProbeRequest(parsed.toString(), 'HEAD', probeBaseHeaders);
@@ -93,7 +138,7 @@ export class HttpDownloadEngine {
     }
 
     const headLength = headResult ? parseContentLength(headResult.headers['content-length']) : null;
-    const needsGetProbe =
+    const needsRangeProbe =
       !headResult ||
       headResult.statusCode === 405 ||
       headResult.statusCode === 501 ||
@@ -102,16 +147,57 @@ export class HttpDownloadEngine {
       headLength === null;
 
     let finalInfo = headResult;
-    if (needsGetProbe) {
+    let rangeRejected = false;
+
+    if (needsRangeProbe) {
       try {
-        finalInfo = await this.performProbeRequest(parsed.toString(), 'GET', {
+        const rangeInfo = await this.performProbeRequest(parsed.toString(), 'GET', {
           ...probeBaseHeaders,
           Range: 'bytes=0-0',
         });
+        if (rangeInfo.statusCode === 403 || rangeInfo.statusCode === 416) {
+          rangeRejected = true;
+        }
+        finalInfo = rangeInfo;
       } catch (err) {
         if (!headResult) {
-          throw err;
+          if (!this.electronNet) throw err;
         }
+      }
+    }
+
+    if (
+      !finalInfo ||
+      finalInfo.statusCode === 403 ||
+      finalInfo.statusCode === 416 ||
+      finalInfo.statusCode === 400
+    ) {
+      try {
+        const plainGet = await this.performProbeRequest(
+          parsed.toString(),
+          'GET',
+          probeBaseHeaders
+        );
+        if (!finalInfo || plainGet.statusCode < 400) {
+          finalInfo = plainGet;
+        }
+      } catch {
+      }
+    }
+
+    if ((!finalInfo || finalInfo.statusCode === 403) && this.electronNet) {
+      try {
+        const electronProbe = await this.electronNet.probe(
+          parsed.toString(),
+          buildBrowserHeaders(probeBaseHeaders)
+        );
+        if (electronProbe.statusCode < 400) {
+          finalInfo = electronProbe;
+          rangeRejected = false;
+          this.electronNetPreferredUrls.add(rawUrl);
+          this.electronNetPreferredUrls.add(electronProbe.finalUrl);
+        }
+      } catch {
       }
     }
 
@@ -133,7 +219,7 @@ export class HttpDownloadEngine {
 
     const acceptRanges = String(headers['accept-ranges'] ?? '').toLowerCase();
     const resumeSupported =
-      finalInfo.statusCode === 206 || acceptRanges.includes('bytes');
+      !rangeRejected && (finalInfo.statusCode === 206 || acceptRanges.includes('bytes'));
 
     const fileName = extractFileName(
       headers['content-disposition'],
@@ -152,6 +238,35 @@ export class HttpDownloadEngine {
     };
   }
 
+  async fetchBuffer(
+    rawUrl: string,
+    requestHeaders?: Record<string, string>,
+    maxBytes = 12 * 1024 * 1024
+  ): Promise<{ buffer: Buffer; finalUrl: string; headers: http.IncomingHttpHeaders }> {
+    const parsed = validateHttpOrHttpsUrl(rawUrl);
+    const cleanHeaders = sanitizeOutgoingHeaders(requestHeaders);
+
+    try {
+      return await this.fetchBufferNode(parsed.toString(), buildBrowserHeaders(cleanHeaders), maxBytes);
+    } catch (err) {
+      if (this.electronNet && err instanceof HttpStatusError && err.statusCode === 403) {
+        return this.electronNet.fetchBuffer(
+          parsed.toString(),
+          buildBrowserHeaders(cleanHeaders),
+          maxBytes
+        );
+      }
+      if (this.electronNet && !(err instanceof HttpStatusError)) {
+        return this.electronNet.fetchBuffer(
+          parsed.toString(),
+          buildBrowserHeaders(cleanHeaders),
+          maxBytes
+        );
+      }
+      throw err;
+    }
+  }
+
   async start(item: DownloadItem, opts: HttpRunOptions): Promise<void> {
     if (this.activeTasks.has(item.id)) return;
 
@@ -159,6 +274,7 @@ export class HttpDownloadEngine {
       controller: new AbortController(),
       requests: new Set(),
       stoppedByUser: false,
+      useElectronNet: this.electronNetPreferredUrls.has(item.source),
     };
     this.activeTasks.set(item.id, task);
 
@@ -186,6 +302,13 @@ export class HttpDownloadEngine {
         totalBytes = probe.totalBytes;
         resumeSupported = probe.resumeSupported;
         if (!resolvedName) resolvedName = probe.fileName;
+      }
+
+      if (
+        this.electronNetPreferredUrls.has(item.source) ||
+        this.electronNetPreferredUrls.has(targetUrl)
+      ) {
+        task.useElectronNet = true;
       }
 
       const effectiveHeaders = stripUnsafeRedirectHeaders(
@@ -398,6 +521,7 @@ export class HttpDownloadEngine {
       requestHeaders,
       throttleBucket,
       seg,
+      allSegments,
       totalBytes,
       resumeSupported,
       handle,
@@ -427,6 +551,7 @@ export class HttpDownloadEngine {
           requestHeaders,
           throttleBucket,
           seg,
+          totalSegments: allSegments.length,
           totalBytes,
           resumeSupported,
           handle,
@@ -465,6 +590,7 @@ export class HttpDownloadEngine {
     requestHeaders?: Record<string, string>;
     throttleBucket: TokenBucket;
     seg: SegmentInfo;
+    totalSegments: number;
     totalBytes: number | null;
     resumeSupported: boolean;
     handle: fs.promises.FileHandle;
@@ -477,6 +603,7 @@ export class HttpDownloadEngine {
       requestHeaders,
       throttleBucket,
       seg,
+      totalSegments,
       totalBytes,
       resumeSupported,
       handle,
@@ -485,10 +612,7 @@ export class HttpDownloadEngine {
       onTotalBytesDiscovered,
     } = params;
 
-    const headers: Record<string, string> = {
-      'User-Agent': USER_AGENT,
-      ...requestHeaders,
-    };
+    const headers = buildBrowserHeaders(requestHeaders);
 
     const hasKnownEnd = seg.end >= seg.start;
     if (resumeSupported && (hasKnownEnd || seg.downloaded > 0)) {
@@ -496,105 +620,245 @@ export class HttpDownloadEngine {
       headers.Range = hasKnownEnd ? `bytes=${startByte}-${seg.end}` : `bytes=${startByte}-`;
     }
 
-      const { res, statusCode } = await this.openFollowStream(url, headers, task);
-      res.socket?.setNoDelay(true);
-      const cleanupOnAbort = () => {
-        res.destroy();
-      };
-      task.controller.signal.addEventListener('abort', cleanupOnAbort, { once: true });
+    const allowRangeStrip = Boolean(headers.Range) && seg.downloaded === 0 && totalSegments === 1;
+    const streamRes = await this.openSegmentStream(url, headers, task, allowRangeStrip);
+    const { statusCode } = streamRes;
+    const cleanupOnAbort = () => {
+      streamRes.destroy();
+    };
+    task.controller.signal.addEventListener('abort', cleanupOnAbort, { once: true });
 
-      try {
-        if (statusCode >= 400) {
-          res.resume();
-          throw new HttpStatusError(statusCode, `HTTP ${statusCode}`);
-        }
-
-        if (statusCode === 200 && seg.downloaded > 0) {
-          if (seg.index === 0 && !hasKnownEnd) {
-            seg.downloaded = 0;
-            await handle.truncate(0);
-          } else if (seg.start + seg.downloaded > 0) {
-            res.resume();
-            throw new Error('Server refused byte-range resume (returned HTTP 200)');
-          }
-        }
-
-        if (totalBytes === null) {
-          const len = parseContentLength(res.headers['content-length']);
-          if (len !== null) {
-            onTotalBytesDiscovered(len);
-          }
-        }
-
-        const expectedSegmentLen = seg.end >= seg.start ? seg.end - seg.start + 1 : null;
-        let pendingChunks: Buffer[] = [];
-        let pendingBytes = 0;
-        let lastFlushAt = Date.now();
-
-        const flushPending = async (): Promise<void> => {
-          if (pendingBytes <= 0) return;
-          if (task.stoppedByUser || task.controller.signal.aborted) {
-            throw createAbortError();
-          }
-          const combined =
-            pendingChunks.length === 1 ? pendingChunks[0] : Buffer.concat(pendingChunks, pendingBytes);
-          pendingChunks = [];
-          pendingBytes = 0;
-          lastFlushAt = Date.now();
-          const position = seg.start + seg.downloaded;
-          await handle.write(combined, 0, combined.length, position);
-          seg.downloaded += combined.length;
-          onBytes();
-        };
-
-        for await (const rawChunk of res) {
-          if (task.stoppedByUser || task.controller.signal.aborted) {
-            throw createAbortError();
-          }
-          const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-          let toWrite = chunk;
-          if (expectedSegmentLen !== null) {
-            const remaining = expectedSegmentLen - (seg.downloaded + pendingBytes);
-            if (remaining <= 0) break;
-            if (toWrite.length > remaining) {
-              toWrite = toWrite.subarray(0, remaining);
-            }
-          }
-          if (toWrite.length === 0) continue;
-
-          await throttleBucket.consume(toWrite.length, task.controller.signal);
-
-          if (task.stoppedByUser || task.controller.signal.aborted) {
-            throw createAbortError();
-          }
-
-          pendingChunks.push(toWrite);
-          pendingBytes += toWrite.length;
-
-          const throttled = throttleBucket.getLimit() !== null;
-          const reachedSegmentEnd =
-            expectedSegmentLen !== null && seg.downloaded + pendingBytes >= expectedSegmentLen;
-          const flushWindowElapsed = Date.now() - lastFlushAt >= WRITE_FLUSH_INTERVAL_MS;
-
-          if (throttled || pendingBytes >= WRITE_BUFFER_BYTES || flushWindowElapsed || reachedSegmentEnd) {
-            await flushPending();
-          }
-
-          if (reachedSegmentEnd) {
-            res.destroy();
-            break;
-          }
-        }
-
-        await flushPending();
-
-        if (expectedSegmentLen !== null && seg.downloaded < expectedSegmentLen) {
-          throw new Error(`Incomplete segment ${seg.index + 1} (${seg.downloaded}/${expectedSegmentLen})`);
-        }
-      } finally {
-        task.controller.signal.removeEventListener('abort', cleanupOnAbort);
-        res.destroy();
+    try {
+      if (statusCode >= 400) {
+        streamRes.destroy();
+        throw new HttpStatusError(statusCode, `HTTP ${statusCode}`);
       }
+
+      if (statusCode === 200 && seg.downloaded > 0) {
+        if (seg.index === 0 && !hasKnownEnd) {
+          seg.downloaded = 0;
+          await handle.truncate(0);
+        } else if (seg.start + seg.downloaded > 0) {
+          streamRes.destroy();
+          throw new Error('Server refused byte-range resume (returned HTTP 200)');
+        }
+      }
+
+      if (totalBytes === null) {
+        const len = parseContentLength(streamRes.headers['content-length']);
+        if (len !== null) {
+          onTotalBytesDiscovered(len);
+        }
+      }
+
+      const expectedSegmentLen = seg.end >= seg.start ? seg.end - seg.start + 1 : null;
+      let pendingChunks: Buffer[] = [];
+      let pendingBytes = 0;
+      let lastFlushAt = Date.now();
+
+      const flushPending = async (): Promise<void> => {
+        if (pendingBytes <= 0) return;
+        if (task.stoppedByUser || task.controller.signal.aborted) {
+          throw createAbortError();
+        }
+        const combined =
+          pendingChunks.length === 1 ? pendingChunks[0] : Buffer.concat(pendingChunks, pendingBytes);
+        pendingChunks = [];
+        pendingBytes = 0;
+        lastFlushAt = Date.now();
+        const position = seg.start + seg.downloaded;
+        await handle.write(combined, 0, combined.length, position);
+        seg.downloaded += combined.length;
+        onBytes();
+      };
+
+      for await (const rawChunk of streamRes.stream) {
+        if (task.stoppedByUser || task.controller.signal.aborted) {
+          throw createAbortError();
+        }
+        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+        let toWrite = chunk;
+        if (expectedSegmentLen !== null) {
+          const remaining = expectedSegmentLen - (seg.downloaded + pendingBytes);
+          if (remaining <= 0) break;
+          if (toWrite.length > remaining) {
+            toWrite = toWrite.subarray(0, remaining);
+          }
+        }
+        if (toWrite.length === 0) continue;
+
+        await throttleBucket.consume(toWrite.length, task.controller.signal);
+
+        if (task.stoppedByUser || task.controller.signal.aborted) {
+          throw createAbortError();
+        }
+
+        pendingChunks.push(toWrite);
+        pendingBytes += toWrite.length;
+
+        const throttled = throttleBucket.getLimit() !== null;
+        const reachedSegmentEnd =
+          expectedSegmentLen !== null && seg.downloaded + pendingBytes >= expectedSegmentLen;
+        const flushWindowElapsed = Date.now() - lastFlushAt >= WRITE_FLUSH_INTERVAL_MS;
+
+        if (throttled || pendingBytes >= WRITE_BUFFER_BYTES || flushWindowElapsed || reachedSegmentEnd) {
+          await flushPending();
+        }
+
+        if (reachedSegmentEnd) {
+          streamRes.destroy();
+          break;
+        }
+      }
+
+      await flushPending();
+
+      if (expectedSegmentLen !== null && seg.downloaded < expectedSegmentLen) {
+        throw new Error(`Incomplete segment ${seg.index + 1} (${seg.downloaded}/${expectedSegmentLen})`);
+      }
+    } finally {
+      task.controller.signal.removeEventListener('abort', cleanupOnAbort);
+      streamRes.destroy();
+    }
+  }
+
+  private async openSegmentStream(
+    url: string,
+    headers: Record<string, string>,
+    task: ActiveTask,
+    allowRangeStrip: boolean
+  ): Promise<HttpStreamResponse> {
+    if (task.useElectronNet && this.electronNet) {
+      let res = await this.electronNet.openStream(url, headers, task.controller.signal);
+      if (res.statusCode === 403 && allowRangeStrip && headers.Range) {
+        res.destroy();
+        const withoutRange = { ...headers };
+        delete withoutRange.Range;
+        res = await this.electronNet.openStream(url, withoutRange, task.controller.signal);
+      }
+      return res;
+    }
+
+    const wrapNodeResponse = (nodeRes: http.IncomingMessage, statusCode: number): HttpStreamResponse => ({
+      statusCode,
+      headers: nodeRes.headers,
+      stream: nodeRes,
+      destroy: () => {
+        nodeRes.destroy();
+      },
+    });
+
+    const nodeAttempt = await this.openFollowStream(url, headers, task);
+    if (nodeAttempt.statusCode === 403 && this.electronNet) {
+      nodeAttempt.res.resume();
+      nodeAttempt.res.destroy();
+      task.useElectronNet = true;
+      let electronRes = await this.electronNet.openStream(url, headers, task.controller.signal);
+      if (electronRes.statusCode === 403 && allowRangeStrip && headers.Range) {
+        electronRes.destroy();
+        const withoutRange = { ...headers };
+        delete withoutRange.Range;
+        electronRes = await this.electronNet.openStream(url, withoutRange, task.controller.signal);
+      }
+      return electronRes;
+    }
+
+    if (nodeAttempt.statusCode === 403 && allowRangeStrip && headers.Range) {
+      nodeAttempt.res.resume();
+      nodeAttempt.res.destroy();
+      const withoutRange = { ...headers };
+      delete withoutRange.Range;
+      const retryAttempt = await this.openFollowStream(url, withoutRange, task);
+      return wrapNodeResponse(retryAttempt.res, retryAttempt.statusCode);
+    }
+
+    return wrapNodeResponse(nodeAttempt.res, nodeAttempt.statusCode);
+  }
+
+  private async fetchBufferNode(
+    urlStr: string,
+    headers: Record<string, string>,
+    maxBytes: number,
+    redirects = 0
+  ): Promise<{ buffer: Buffer; finalUrl: string; headers: http.IncomingHttpHeaders }> {
+    const url = new URL(urlStr);
+    const client = url.protocol === 'https:' ? https : http;
+
+    return new Promise((resolve, reject) => {
+      const req = client.request(
+        url,
+        {
+          method: 'GET',
+          agent: url.protocol === 'https:' ? this.httpsAgent : this.httpAgent,
+          headers,
+        },
+        (res) => {
+          const statusCode = res.statusCode ?? 0;
+          const location = res.headers.location;
+          if (
+            location &&
+            [301, 302, 303, 307, 308].includes(statusCode) &&
+            redirects < MAX_REDIRECTS
+          ) {
+            res.resume();
+            let nextUrl: string;
+            try {
+              nextUrl = validateHttpOrHttpsUrl(new URL(location, url).toString()).toString();
+            } catch (err) {
+              reject(err);
+              return;
+            }
+            const nextHeaders = stripUnsafeRedirectHeaders(headers, url.toString(), nextUrl);
+            this.fetchBufferNode(nextUrl, nextHeaders, maxBytes, redirects + 1)
+              .then(resolve)
+              .catch(reject);
+            return;
+          }
+
+          if (statusCode >= 400) {
+            res.resume();
+            reject(new HttpStatusError(statusCode, `HTTP ${statusCode}`));
+            return;
+          }
+
+          const chunks: Buffer[] = [];
+          let total = 0;
+          let settled = false;
+          res.on('data', (chunk: Buffer | string) => {
+            if (settled) return;
+            const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            total += buf.length;
+            if (total > maxBytes) {
+              settled = true;
+              res.destroy();
+              reject(new Error('Remote file exceeds maximum allowed size'));
+              return;
+            }
+            chunks.push(buf);
+          });
+          res.on('end', () => {
+            if (settled) return;
+            settled = true;
+            resolve({
+              buffer: Buffer.concat(chunks, total),
+              finalUrl: url.toString(),
+              headers: res.headers,
+            });
+          });
+          res.on('error', (err) => {
+            if (settled) return;
+            settled = true;
+            reject(err);
+          });
+        }
+      );
+
+      req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+        req.destroy(new Error('Request timed out'));
+      });
+      req.on('error', reject);
+      req.end();
+    });
   }
 
   private async performProbeRequest(
@@ -602,7 +866,7 @@ export class HttpDownloadEngine {
     method: 'HEAD' | 'GET',
     extraHeaders: Record<string, string> = {},
     redirects = 0
-  ): Promise<{ finalUrl: string; statusCode: number; headers: http.IncomingHttpHeaders }> {
+  ): Promise<HttpProbeResponse> {
     const url = new URL(urlStr);
     const client = url.protocol === 'https:' ? https : http;
 
@@ -612,10 +876,7 @@ export class HttpDownloadEngine {
         {
           method,
           agent: url.protocol === 'https:' ? this.httpsAgent : this.httpAgent,
-          headers: {
-            'User-Agent': USER_AGENT,
-            ...extraHeaders,
-          },
+          headers: buildBrowserHeaders(extraHeaders),
         },
         (res) => {
           const statusCode = res.statusCode ?? 0;
@@ -680,6 +941,7 @@ export class HttpDownloadEngine {
         },
         (res) => {
           task.requests.delete(req);
+          res.socket?.setNoDelay(true);
           const statusCode = res.statusCode ?? 0;
           const location = res.headers.location;
           if (

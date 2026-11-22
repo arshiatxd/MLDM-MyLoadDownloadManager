@@ -151,14 +151,14 @@ export function TorrentFileTree({
       const isExpanded = isFiltering || expandedFolders.has(node.id);
       const pct =
         node.totalBytes > 0
-          ? Math.min(100, Math.round((node.downloadedBytes / node.totalBytes) * 100))
+          ? Math.max(0, Math.min(100, Math.round((node.downloadedBytes / node.totalBytes) * 100)))
           : 100;
 
       return (
         <div key={node.id}>
           <div
-            className="flex items-center gap-2 border-b border-[var(--border-subtle)]/40 px-2 py-1.5 text-[12px] last:border-b-0 hover:bg-[var(--bg-hover)]/55"
-            style={{ paddingLeft: `${8 + depth * 14}px` }}
+            className="flex items-center gap-1.5 overflow-x-hidden border-b border-[var(--border-subtle)]/40 px-2 py-1.5 text-[12px] last:border-b-0 hover:bg-[var(--bg-hover)]/55"
+            style={{ paddingLeft: `${8 + depth * 12}px` }}
           >
             {node.isFolder ? (
               <button
@@ -215,19 +215,19 @@ export function TorrentFileTree({
               </span>
             </div>
 
-            <span className="w-20 shrink-0 text-right font-mono text-[11px] text-[var(--text-secondary)]">
+            <span className="w-16 shrink-0 text-right font-mono text-[11px] text-[var(--text-secondary)]">
               {formatBytes(node.totalBytes)}
             </span>
 
             {showProgress && (
-              <div className="flex w-24 shrink-0 items-center justify-end gap-1.5">
-                <div className="h-1.5 w-14 overflow-hidden rounded-full bg-[var(--bg-elevated)]">
+              <div className="flex w-20 shrink-0 items-center justify-end gap-1.5">
+                <div className="h-1.5 w-11 overflow-hidden rounded-full bg-[var(--bg-elevated)]">
                   <div
                     className="h-full rounded-full bg-[var(--accent)]"
                     style={{ width: `${pct}%` }}
                   />
                 </div>
-                <span className="w-8 text-right font-mono text-[10.5px] text-[var(--text-secondary)]">
+                <span className="w-7 text-right font-mono text-[10.5px] text-[var(--text-secondary)]">
                   {pct}%
                 </span>
               </div>
@@ -289,12 +289,12 @@ export function TorrentFileTree({
       </div>
 
       <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)]/70">
-        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/80 px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)]">
+        <div className="flex items-center gap-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/80 px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)]">
           <span className="flex-1 pl-6">Name</span>
-          <span className="w-20 shrink-0 text-right">Total Size</span>
-          {showProgress && <span className="w-24 shrink-0 text-right">Progress</span>}
+          <span className="w-16 shrink-0 text-right">Size</span>
+          {showProgress && <span className="w-20 shrink-0 text-right">Progress</span>}
         </div>
-        <div className={`${compact ? 'max-h-40' : 'max-h-56'} overflow-y-auto`}>
+        <div className={`${compact ? 'max-h-40' : 'max-h-56'} overflow-x-hidden overflow-y-auto`}>
           {tree.length === 0 ? (
             <div className="py-4 text-center text-[11.5px] text-[var(--text-muted)]">
               No matching files or folders.

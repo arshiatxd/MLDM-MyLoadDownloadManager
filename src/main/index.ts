@@ -1,12 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import type http from 'node:http';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import {
   BrowserWindow,
   Notification,
   app,
   clipboard,
+  net,
   powerSaveBlocker,
   session,
   shell,
@@ -14,9 +17,11 @@ import {
 import { isHttpUrl, isMagnetUri, isTorrentFilePath } from '../shared/constants';
 import type { PopupSessionData } from '../shared/types';
 import { DownloadManager } from './download-manager';
+import type { ElectronNetAdapter, HttpProbeResponse, HttpStreamResponse } from './http-engine';
 import { registerIpcHandlers } from './ipc';
 import { ensureNativeMessagingHostRegistered } from './native-host';
 import { createElectronPowerAdapter } from './power';
+import { stripUnsafeRedirectHeaders, validateHttpOrHttpsUrl } from './security';
 import { createAppTray, type AppTrayController } from './tray';
 import { UpdateService } from './updater';
 
@@ -44,7 +49,11 @@ let shutdownPromise: Promise<void> | null = null;
 let startupUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 const popupWindows = new Map<string, { win: BrowserWindow; data: PopupSessionData }>();
 const isStartupLaunch = process.argv.includes('--startup');
-const isBackgroundLaunch = isStartupLaunch || process.argv.includes('--background-launch');
+const isProtocolBackground = process.argv.some((a) => /^myload:\/\/background/i.test(a));
+const isBackgroundLaunch =
+  isStartupLaunch ||
+  process.argv.includes('--background-launch') ||
+  isProtocolBackground;
 
 function syncStartupLoginItem(enabled: boolean): void {
   if (!app.isPackaged || process.env.MYLOAD_SMOKE_TEST === '1') return;
@@ -216,7 +225,7 @@ function openDownloadProgressPopup(downloadId: string): void {
 
 function extractLaunchSource(argv: string[]): string | undefined {
   for (const arg of argv.slice(1)) {
-    if (arg.startsWith('-')) continue;
+    if (arg.startsWith('-') || /^myload:\/\//i.test(arg)) continue;
     if (isHttpUrl(arg) || isMagnetUri(arg) || isTorrentFilePath(arg)) {
       return arg;
     }
@@ -320,7 +329,7 @@ function createMainWindow(): BrowserWindow {
     if (!isSmokeTest) {
       if (isBackgroundLaunch && manager?.getSettings().minimizeToTray) {
       } else if (isBackgroundLaunch) {
-        if (!process.argv.includes('--background-launch')) {
+        if (!process.argv.includes('--background-launch') && !isProtocolBackground) {
           win.showInactive();
           win.minimize();
         }
@@ -361,6 +370,9 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.on('second-instance', (_event, argv) => {
+  if (argv.some((a) => /^myload:\/\/background/i.test(a))) {
+    return;
+  }
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -394,11 +406,192 @@ app.whenReady().then(() => {
   const defaultDownloadsDir = app.getPath('downloads');
   let lastStartupEnabled: boolean | null = null;
 
+function createElectronNetAdapter(): ElectronNetAdapter {
+  const openRaw = (
+    urlStr: string,
+    method: 'GET' | 'HEAD',
+    headers: Record<string, string>,
+    redirects = 0
+  ): Promise<{
+    req: Electron.ClientRequest;
+    res: Electron.IncomingMessage;
+    finalUrl: string;
+  }> =>
+    new Promise((resolve, reject) => {
+      const req = net.request({ url: urlStr, method, redirect: 'manual' });
+      for (const [k, v] of Object.entries(headers)) {
+        if (!v) continue;
+        try {
+          req.setHeader(k, v);
+        } catch {
+        }
+      }
+      const timer = setTimeout(() => {
+        try {
+          req.abort();
+        } catch {
+        }
+        reject(new Error('Request timed out'));
+      }, 20000);
+
+      req.on('response', (res) => {
+        clearTimeout(timer);
+        const statusCode = res.statusCode ?? 0;
+        const locHeader = res.headers.location;
+        const location = Array.isArray(locHeader) ? locHeader[0] : locHeader;
+        if (
+          location &&
+          [301, 302, 303, 307, 308].includes(statusCode) &&
+          redirects < 10
+        ) {
+          try {
+            req.abort();
+          } catch {
+          }
+          let nextUrl: string;
+          try {
+            nextUrl = validateHttpOrHttpsUrl(new URL(location, urlStr).toString()).toString();
+          } catch (err) {
+            reject(err);
+            return;
+          }
+          const nextHeaders = stripUnsafeRedirectHeaders(headers, urlStr, nextUrl);
+          openRaw(nextUrl, method, nextHeaders, redirects + 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        resolve({ req, res, finalUrl: urlStr });
+      });
+
+      req.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+
+      req.end();
+    });
+
+  return {
+    probe: async (url, headers): Promise<HttpProbeResponse> => {
+      const rangeHeaders = { ...headers, Range: 'bytes=0-0' };
+      const attempt = await openRaw(url, 'GET', rangeHeaders);
+      const status = attempt.res.statusCode ?? 0;
+      const hdrs = attempt.res.headers as http.IncomingHttpHeaders;
+      try {
+        attempt.req.abort();
+      } catch {
+      }
+      if (status === 403 || status === 416) {
+        const plainHeaders = { ...headers };
+        delete plainHeaders.Range;
+        const plain = await openRaw(url, 'GET', plainHeaders);
+        const plainStatus = plain.res.statusCode ?? 0;
+        const plainHdrs = plain.res.headers as http.IncomingHttpHeaders;
+        try {
+          plain.req.abort();
+        } catch {
+        }
+        return { finalUrl: plain.finalUrl, statusCode: plainStatus, headers: plainHdrs };
+      }
+      return { finalUrl: attempt.finalUrl, statusCode: status, headers: hdrs };
+    },
+
+    openStream: async (url, headers, signal): Promise<HttpStreamResponse> => {
+      if (signal.aborted) {
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        throw aborted;
+      }
+      const { req, res } = await openRaw(url, 'GET', headers);
+      const pass = new PassThrough();
+      let destroyed = false;
+      const cleanup = () => {
+        if (destroyed) return;
+        destroyed = true;
+        try {
+          req.abort();
+        } catch {
+        }
+        pass.destroy();
+      };
+      const onSignalAbort = () => cleanup();
+      signal.addEventListener('abort', onSignalAbort, { once: true });
+      res.on('data', (chunk) => {
+        if (!destroyed) pass.write(chunk);
+      });
+      res.on('end', () => {
+        signal.removeEventListener('abort', onSignalAbort);
+        pass.end();
+      });
+      res.on('aborted', () => {
+        signal.removeEventListener('abort', onSignalAbort);
+        pass.destroy();
+      });
+      res.on('error', (err) => {
+        signal.removeEventListener('abort', onSignalAbort);
+        pass.destroy(err instanceof Error ? err : new Error(String(err)));
+      });
+      return {
+        statusCode: res.statusCode ?? 0,
+        headers: res.headers as http.IncomingHttpHeaders,
+        stream: pass,
+        destroy: cleanup,
+      };
+    },
+
+    fetchBuffer: async (url, headers, maxBytes) => {
+      const { req, res, finalUrl } = await openRaw(url, 'GET', headers);
+      const status = res.statusCode ?? 0;
+      const hdrs = res.headers as http.IncomingHttpHeaders;
+      if (status >= 400) {
+        try {
+          req.abort();
+        } catch {
+        }
+        throw new Error(`HTTP ${status}`);
+      }
+      const buf = await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let total = 0;
+        let done = false;
+        res.on('data', (chunk) => {
+          if (done) return;
+          const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          total += b.length;
+          if (total > maxBytes) {
+            done = true;
+            try {
+              req.abort();
+            } catch {
+            }
+            reject(new Error('Remote file exceeds maximum allowed size'));
+            return;
+          }
+          chunks.push(b);
+        });
+        res.on('end', () => {
+          if (done) return;
+          done = true;
+          resolve(Buffer.concat(chunks, total));
+        });
+        res.on('error', (err) => {
+          if (done) return;
+          done = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+      });
+      return { buffer: buf, finalUrl, headers: hdrs };
+    },
+  };
+}
+
   manager = new DownloadManager({
     stateFilePath: path.join(userDataDir, 'state.json'),
     logFilePath: path.join(userDataDir, 'logs', 'myload.log'),
     defaultDownloadDir: defaultDownloadsDir,
     appVersion: app.getVersion(),
+    electronNet: createElectronNetAdapter(),
     powerAdapter: createElectronPowerAdapter(powerSaveBlocker, () => {
       void performQuit();
     }),

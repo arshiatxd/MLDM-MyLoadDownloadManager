@@ -3,6 +3,8 @@ import path from 'node:path';
 const ALLOWED_HEADER_KEYS: Record<string, string> = {
   cookie: 'Cookie',
   referer: 'Referer',
+  origin: 'Origin',
+  'accept-language': 'Accept-Language',
   'user-agent': 'User-Agent',
 };
 
@@ -78,7 +80,7 @@ export function stripUnsafeRedirectHeaders(
   for (const [k, v] of Object.entries(headers)) {
     const lower = k.toLowerCase();
     if (stripCookie && lower === 'cookie') continue;
-    if (stripReferer && lower === 'referer') continue;
+    if (stripReferer && (lower === 'referer' || lower === 'origin')) continue;
     next[k] = v;
   }
   return next;

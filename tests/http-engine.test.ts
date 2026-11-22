@@ -396,5 +396,131 @@ describe('HttpDownloadEngine', () => {
       await new Promise<void>((r) => otherServer.close(() => r()));
     }
   });
+
+  it('falls back from 403 HEAD/Range probes to plain GET and to electronNet adapter', async () => {
+    const bodyBuf = Buffer.from('protected-download-payload-12345');
+    const cdnServer = http.createServer((req, res) => {
+      if (req.url === '/no-range') {
+        if (req.method === 'HEAD' || req.headers.range) {
+          res.writeHead(403).end('Forbidden');
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Length': String(bodyBuf.length),
+          'Content-Type': 'application/octet-stream',
+        });
+        res.end(bodyBuf);
+        return;
+      }
+
+      res.writeHead(403).end('TLS blocked');
+    });
+
+    await new Promise<void>((r) => cdnServer.listen(0, '127.0.0.1', r));
+    const port = (cdnServer.address() as { port: number }).port;
+
+    try {
+      const throttle = new TokenBucket(null);
+      const logger = new LogManager(null);
+      const engineNoFallback = new HttpDownloadEngine(throttle, logger);
+
+      const noRangeProbe = await engineNoFallback.probeUrl(`http://127.0.0.1:${port}/no-range`);
+      expect(noRangeProbe.totalBytes).toBe(bodyBuf.length);
+      expect(noRangeProbe.resumeSupported).toBe(false);
+
+      const noRangeItem: DownloadItem = {
+        id: 'dl-no-range',
+        kind: 'http',
+        source: `http://127.0.0.1:${port}/no-range`,
+        name: 'payload.bin',
+        saveDir: tmpDir,
+        filePath: path.join(tmpDir, 'payload.bin'),
+        category: 'other',
+        status: 'queued',
+        totalBytes: null,
+        downloadedBytes: 0,
+        uploadedBytes: 0,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        etaSeconds: null,
+        resumeSupported: false,
+        segments: [],
+        addedAt: Date.now(),
+        retryCount: 0,
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        void engineNoFallback.start(noRangeItem, {
+          connections: 4,
+          maxRetries: 0,
+          duplicatePolicy: 'overwrite',
+          onProgress: (p) => Object.assign(noRangeItem, p),
+          onComplete: () => resolve(),
+          onError: (m) => reject(new Error(m)),
+        });
+      });
+      expect(await fs.promises.readFile(path.join(tmpDir, 'payload.bin'))).toEqual(bodyBuf);
+
+      const engineWithAdapter = new HttpDownloadEngine(throttle, logger, {
+        electronNet: {
+          probe: async (url) => ({
+            finalUrl: url,
+            statusCode: 200,
+            headers: {
+              'content-length': String(bodyBuf.length),
+              'content-disposition': 'attachment; filename="net-file.bin"',
+            },
+          }),
+          openStream: async () => ({
+            statusCode: 200,
+            headers: { 'content-length': String(bodyBuf.length) },
+            stream: {
+              async *[Symbol.asyncIterator]() {
+                yield bodyBuf;
+              },
+            },
+            destroy: () => {},
+          }),
+          fetchBuffer: async (url) => ({
+            buffer: bodyBuf,
+            finalUrl: url,
+            headers: { 'content-length': String(bodyBuf.length) },
+          }),
+        },
+      });
+
+      const blockedUrl = `http://127.0.0.1:${port}/blocked-tls`;
+      const adapterProbe = await engineWithAdapter.probeUrl(blockedUrl);
+      expect(adapterProbe.fileName).toBe('net-file.bin');
+      expect(adapterProbe.totalBytes).toBe(bodyBuf.length);
+
+      const fetched = await engineWithAdapter.fetchBuffer(blockedUrl);
+      expect(fetched.buffer).toEqual(bodyBuf);
+
+      const adapterItem: DownloadItem = {
+        ...noRangeItem,
+        id: 'dl-adapter',
+        source: blockedUrl,
+        name: 'net-file.bin',
+        filePath: path.join(tmpDir, 'net-file.bin'),
+        totalBytes: null,
+        downloadedBytes: 0,
+        segments: [],
+      };
+      await new Promise<void>((resolve, reject) => {
+        void engineWithAdapter.start(adapterItem, {
+          connections: 1,
+          maxRetries: 0,
+          duplicatePolicy: 'overwrite',
+          onProgress: (p) => Object.assign(adapterItem, p),
+          onComplete: () => resolve(),
+          onError: (m) => reject(new Error(m)),
+        });
+      });
+      expect(await fs.promises.readFile(path.join(tmpDir, 'net-file.bin'))).toEqual(bodyBuf);
+    } finally {
+      await new Promise<void>((r) => cdnServer.close(() => r()));
+    }
+  });
 });
 

@@ -59,7 +59,7 @@
 
   CreateDirectory "$LOCALAPPDATA\MyLoad\native-host"
   FileOpen $R1 "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd" w
-  FileWrite $R1 '@echo off$\r$\nsetlocal$\r$\nset "ELECTRON_RUN_AS_NODE=1"$\r$\nset "MYLOAD_LAUNCH_EXE=$INSTDIR\${APP_EXECUTABLE_FILENAME}"$\r$\nset "MYLOAD_USER_DATA_DIR=$APPDATA\MyLoad Download Manager"$\r$\n"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "$INSTDIR\resources\native-host.cjs" %*$\r$\n'
+  FileWrite $R1 '@echo off$\r$\nsetlocal$\r$\nset "ELECTRON_RUN_AS_NODE=1"$\r$\nset "MYLOAD_LAUNCH_EXE=$INSTDIR\${APP_EXECUTABLE_FILENAME}"$\r$\nset "MYLOAD_USER_DATA_DIR=$APPDATA\myload"$\r$\n"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "$INSTDIR\resources\native-host.cjs" %*$\r$\n'
   FileClose $R1
 
   ${WordReplace} "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd" "\" "\\" "+" $R0
@@ -73,6 +73,17 @@
   WriteRegStr HKCU "Software\Chromium\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
   WriteRegStr HKCU "Software\Vivaldi\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
   WriteRegStr HKCU "Software\Opera Software\Opera Stable\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Opera Software\Opera GX Stable\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKCU "Software\Yandex\YandexBrowser\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKLM "Software\Google\Chrome\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+  WriteRegStr HKLM "Software\Microsoft\Edge\NativeMessagingHosts\com.myload.host" "" "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
+
+  WriteRegStr HKCU "Software\Classes\myload" "" "URL:MyLoad Protocol"
+  WriteRegStr HKCU "Software\Classes\myload" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\myload\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
+  WriteRegStr HKLM "Software\Classes\myload" "" "URL:MyLoad Protocol"
+  WriteRegStr HKLM "Software\Classes\myload" "URL Protocol" ""
+  WriteRegStr HKLM "Software\Classes\myload\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
 !macroend
 
 !macro customUnInstall
@@ -84,6 +95,12 @@
   DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\com.myload.host"
   DeleteRegKey HKCU "Software\Vivaldi\NativeMessagingHosts\com.myload.host"
   DeleteRegKey HKCU "Software\Opera Software\Opera Stable\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Opera Software\Opera GX Stable\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Yandex\YandexBrowser\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKLM "Software\Google\Chrome\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKLM "Software\Microsoft\Edge\NativeMessagingHosts\com.myload.host"
+  DeleteRegKey HKCU "Software\Classes\myload"
+  DeleteRegKey HKLM "Software\Classes\myload"
   Delete "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.json"
   Delete "$LOCALAPPDATA\MyLoad\native-host\com.myload.host.cmd"
   Delete "$LOCALAPPDATA\MyLoad\native-host\native-host.cjs"

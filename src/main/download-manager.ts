@@ -25,6 +25,7 @@ import type {
   DiskSpaceInfo,
   DownloadItem,
   DownloadKind,
+  DownloadPriority,
   DownloadSchedule,
   GlobalStats,
   LogEntry,
@@ -39,7 +40,7 @@ import type {
 } from '../shared/types';
 import { BrowserBridgeServer } from './bridge';
 import { validateSaveDirectory } from './fs-validation';
-import { HttpDownloadEngine } from './http-engine';
+import { HttpDownloadEngine, type ElectronNetAdapter } from './http-engine';
 import { LogManager } from './logger';
 import { scanMultiParts } from './multipart-scanner';
 import { writeActiveBridgePort } from './native-host';
@@ -48,7 +49,7 @@ import { PowerManager, type PowerPlatformAdapter } from './power';
 import { isPathInsideDir, redactSensitiveUrl } from './security';
 import {
   normalizeDownloadPriority,
-  sortItemsByPriority,
+  sortQueuedForScheduling,
 } from '../shared/selection';
 import {
   SocialMediaDownloader,
@@ -60,7 +61,9 @@ import { TokenBucket } from './throttle';
 import {
   TorrentDownloadEngine,
   normalizeTorrentSource,
+  parseTorrentBuffer,
   probeTorrentSource,
+  saveTorrentBufferToCache,
 } from './torrent-engine';
 
 function prepareScheduleForAdd(
@@ -117,6 +120,7 @@ export class DownloadManager {
   private readonly callbacks: ManagerCallbacks;
   private readonly defaultDownloadDir: string;
   private readonly stateDir: string;
+  private readonly torrentsCacheDir: string;
   private readonly enableBridge: boolean;
   private readonly appVersion: string;
 
@@ -133,6 +137,7 @@ export class DownloadManager {
   private lastConsumedDownloadable: string | null = null;
   private lastStatsSignature = '';
   private observedAggregatePeak = 0;
+  private nextQueueOrder = 0;
   private shuttingDown = false;
   private readonly pendingDuplicateChoices = new Map<string, 'auto-rename' | 'overwrite'>();
   private readonly equalBuckets = new Map<string, TokenBucket>();
@@ -148,18 +153,22 @@ export class DownloadManager {
     callbacks?: ManagerCallbacks;
     enableBridge?: boolean;
     appVersion?: string;
+    electronNet?: ElectronNetAdapter;
   }) {
     this.defaultDownloadDir = opts.defaultDownloadDir;
     this.stateDir = path.dirname(opts.stateFilePath);
+    this.torrentsCacheDir = path.join(this.stateDir, 'torrents');
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.13';
+    this.appVersion = opts.appVersion ?? '1.0.14';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
     });
     this.dlThrottle = new TokenBucket(null);
-    this.httpEngine = new HttpDownloadEngine(this.dlThrottle, this.logger);
+    this.httpEngine = new HttpDownloadEngine(this.dlThrottle, this.logger, {
+      electronNet: opts.electronNet,
+    });
     this.torrentEngine = new TorrentDownloadEngine(this.logger);
     this.socialDownloader = new SocialMediaDownloader(
       path.join(path.dirname(opts.stateFilePath), 'bin'),
@@ -210,6 +219,14 @@ export class DownloadManager {
     const loaded = this.store.load();
     this.downloads = loaded.downloads;
     this.settings = loaded.settings;
+    const maxOrder = this.downloads.reduce(
+      (max, d) =>
+        typeof d.queueOrder === 'number' && Number.isFinite(d.queueOrder)
+          ? Math.max(max, d.queueOrder)
+          : max,
+      -1
+    );
+    this.nextQueueOrder = maxOrder + 1;
     this.applyThrottleSettings();
   }
 
@@ -249,6 +266,23 @@ export class DownloadManager {
     return { ...this.settings };
   }
 
+  private isTorrentUrlHint(url: string, fileName?: string): boolean {
+    if (/\.torrent$/i.test(fileName || '')) return true;
+    return /\.torrent(?:$|[?#])/i.test(url || '');
+  }
+
+  private async resolveRemoteTorrentToLocal(
+    url: string,
+    requestHeaders?: Record<string, string>
+  ): Promise<{ filePath: string; probe: ProbeResult }> {
+    const { buffer } = await this.httpEngine.fetchBuffer(
+      url,
+      requestHeaders,
+      12 * 1024 * 1024
+    );
+    return saveTorrentBufferToCache(buffer, this.torrentsCacheDir);
+  }
+
   async probeSource(
     rawSource: string,
     requestHeaders?: Record<string, string>
@@ -258,11 +292,31 @@ export class DownloadManager {
       throw new Error('Please enter a URL, magnet link, or choose a .torrent file');
     }
 
-    if (isMagnetUri(trimmed) || isTorrentFilePath(trimmed) || trimmed.startsWith('file://')) {
+    if (isMagnetUri(trimmed)) {
+      return this.torrentEngine.probeMagnetMetadata(trimmed, this.torrentsCacheDir);
+    }
+
+    if (isTorrentFilePath(trimmed) || trimmed.startsWith('file://')) {
       return probeTorrentSource(trimmed);
     }
 
-    return this.httpEngine.probeUrl(trimmed, requestHeaders);
+    const httpProbe = await this.httpEngine.probeUrl(trimmed, requestHeaders);
+    if (
+      httpProbe.category === 'torrents' ||
+      this.isTorrentUrlHint(httpProbe.finalUrl || trimmed, httpProbe.fileName)
+    ) {
+      try {
+        const cached = await this.resolveRemoteTorrentToLocal(
+          httpProbe.finalUrl || trimmed,
+          requestHeaders
+        );
+        return cached.probe;
+      } catch {
+        return httpProbe;
+      }
+    }
+
+    return httpProbe;
   }
 
   checkFileExists(saveDir: string, fileName: string): boolean {
@@ -299,17 +353,51 @@ export class DownloadManager {
       );
     }
 
-    const kind: DownloadKind =
+    let kind: DownloadKind =
       req.kind ??
       (isMagnetUri(rawSource) || isTorrentFilePath(rawSource) || rawSource.startsWith('file://')
         ? 'torrent'
         : 'http');
 
-    const source = kind === 'torrent' ? normalizeTorrentSource(rawSource) : rawSource;
+    let source = kind === 'torrent' ? normalizeTorrentSource(rawSource) : rawSource;
 
     let probe: ProbeResult | null = null;
-    if (kind === 'torrent' && !isMagnetUri(source)) {
-      probe = await probeTorrentSource(source);
+    let resolvedTorrentFilePath: string | undefined =
+      kind === 'torrent' && !isMagnetUri(source) ? source : undefined;
+
+    if (kind === 'http' && this.isTorrentUrlHint(rawSource, req.fileName)) {
+      try {
+        const resolved = await this.resolveRemoteTorrentToLocal(
+          rawSource,
+          req.requestHeaders
+        );
+        kind = 'torrent';
+        source = resolved.filePath;
+        probe = resolved.probe;
+        resolvedTorrentFilePath = resolved.filePath;
+      } catch {
+      }
+    }
+
+    if (kind === 'torrent' && !probe) {
+      if (isMagnetUri(source)) {
+        const magnetProbe = await probeTorrentSource(source);
+        const hash = (magnetProbe.infoHash || '').toLowerCase();
+        const cachedFile = hash ? path.join(this.torrentsCacheDir, `${hash}.torrent`) : '';
+        if (cachedFile && fs.existsSync(cachedFile)) {
+          try {
+            const buf = await fs.promises.readFile(cachedFile);
+            probe = await parseTorrentBuffer(buf, source);
+            resolvedTorrentFilePath = cachedFile;
+          } catch {
+            probe = magnetProbe;
+          }
+        } else {
+          probe = magnetProbe;
+        }
+      } else {
+        probe = await probeTorrentSource(source);
+      }
     }
 
     const baseName = req.fileName?.trim()
@@ -344,7 +432,7 @@ export class DownloadManager {
         ratio: 0,
         trackers: probe?.trackers ?? [],
         magnetUri: isMagnetUri(source) ? source : undefined,
-        torrentFilePath: isMagnetUri(source) ? undefined : source,
+        torrentFilePath: resolvedTorrentFilePath,
         files,
       };
     }
@@ -400,6 +488,7 @@ export class DownloadManager {
       retryCount: 0,
       schedule,
       priority: normalizeDownloadPriority(req.priority),
+      queueOrder: this.nextQueueOrder++,
     };
 
     if (req.duplicateOverride) {
@@ -505,6 +594,44 @@ export class DownloadManager {
     this.emitAndSaveImmediate();
     this.scheduleQueue();
     this.broadcastStats();
+  }
+
+  setDownloadPriority(id: string, priority: DownloadPriority): void {
+    const item = this.findItem(id);
+    if (!item || item.status === 'completed') return;
+    const normalized = normalizeDownloadPriority(priority);
+    if (item.priority === normalized) return;
+    item.priority = normalized;
+    this.logger.info('Queue', `Set priority for ${item.name} to ${normalized.toUpperCase()}`, item.id);
+    this.emitAndSaveImmediate();
+    this.scheduleQueue();
+  }
+
+  reorderDownloads(orderedIds: string[]): void {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+    const byId = new Map(this.downloads.map((d) => [d.id, d]));
+    const reordered: DownloadItem[] = [];
+    const seen = new Set<string>();
+    for (const id of orderedIds) {
+      const item = byId.get(id);
+      if (item && !seen.has(id)) {
+        seen.add(id);
+        reordered.push(item);
+      }
+    }
+    for (const item of this.downloads) {
+      if (!seen.has(item.id)) {
+        reordered.push(item);
+      }
+    }
+    reordered.forEach((item, idx) => {
+      item.queueOrder = idx;
+    });
+    this.downloads = reordered;
+    this.nextQueueOrder = reordered.length;
+    this.logger.info('Queue', 'Updated download queue order');
+    this.emitAndSaveImmediate();
+    this.scheduleQueue();
   }
 
   async updateDownloadSchedule(
@@ -853,7 +980,7 @@ export class DownloadManager {
       return;
     }
 
-    const queued = sortItemsByPriority(
+    const queued = sortQueuedForScheduling(
       [...this.downloads].reverse().filter((d) => d.status === 'queued')
     );
 
@@ -1422,14 +1549,57 @@ export class DownloadManager {
   }
 
   private async handleBrowserIntercept(
-    payload: BrowserInterceptPayload
+    incomingPayload: BrowserInterceptPayload
   ): Promise<'confirm' | 'started'> {
+    let payload: BrowserInterceptPayload = { ...incomingPayload };
     const requestHeaders: Record<string, string> = {};
     if (payload.cookie) requestHeaders.Cookie = payload.cookie;
-    if (payload.referrer) requestHeaders.Referer = payload.referrer;
+    if (payload.referrer) {
+      requestHeaders.Referer = payload.referrer;
+      try {
+        requestHeaders.Origin = new URL(payload.referrer).origin;
+      } catch {
+      }
+    }
     if (payload.userAgent) requestHeaders['User-Agent'] = payload.userAgent;
 
     const headersOpt = Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined;
+
+    if (payload.torrentDataBase64) {
+      try {
+        const buf = Buffer.from(payload.torrentDataBase64, 'base64');
+        const cached = await saveTorrentBufferToCache(buf, this.torrentsCacheDir);
+        payload = {
+          ...payload,
+          url: cached.filePath,
+          fileName: cached.probe.fileName,
+          fileSize: cached.probe.totalBytes,
+          mime: 'application/x-bittorrent',
+          torrentDataBase64: undefined,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn('Bridge', `Failed to decode base64 torrent payload: ${msg}`);
+        payload.torrentDataBase64 = undefined;
+      }
+    } else if (
+      isHttpUrl(payload.url) &&
+      (/application\/x-bittorrent/i.test(payload.mime || '') ||
+        this.isTorrentUrlHint(payload.url, payload.fileName))
+    ) {
+      try {
+        const cached = await this.resolveRemoteTorrentToLocal(payload.url, headersOpt);
+        payload = {
+          ...payload,
+          url: cached.filePath,
+          fileName: cached.probe.fileName,
+          fileSize: cached.probe.totalBytes,
+          mime: 'application/x-bittorrent',
+        };
+      } catch {
+      }
+    }
+
     const label = payload.fileName || redactSensitiveUrl(payload.url);
     this.logger.info('Bridge', `Intercepted browser download: ${label}`);
 

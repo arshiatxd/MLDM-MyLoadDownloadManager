@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import parseTorrent from 'parse-torrent';
@@ -30,6 +31,68 @@ interface ActiveTorrentEntry {
   stopping: boolean;
 }
 
+export async function parseTorrentBuffer(
+  buf: Buffer,
+  sourceLabel: string
+): Promise<ProbeResult> {
+  const parsed = await parseTorrent(buf);
+  const checkRoot = path.resolve(path.sep, 'myload-torrent-root');
+  const files: TorrentFileInfo[] = (parsed.files ?? []).map((f, index) => {
+    const resolvedEntry = path.resolve(checkRoot, f.path);
+    if (!isPathInsideDir(checkRoot, resolvedEntry)) {
+      throw new Error(`Torrent contains unsafe file path: ${f.path}`);
+    }
+    return {
+      index,
+      name: f.name,
+      path: f.path,
+      length: f.length,
+      downloaded: 0,
+      selected: true,
+    };
+  });
+
+  const fallbackName =
+    /^magnet:/i.test(sourceLabel) || !sourceLabel
+      ? `Torrent-${(parsed.infoHash || 'unknown').slice(0, 8)}`
+      : path.basename(sourceLabel.split('?')[0], '.torrent');
+  const name = sanitizeFileName(parsed.name || fallbackName);
+  const totalBytes =
+    typeof parsed.length === 'number'
+      ? parsed.length
+      : files.reduce((sum, f) => sum + f.length, 0);
+
+  return {
+    kind: 'torrent',
+    source: sourceLabel,
+    fileName: name,
+    totalBytes,
+    resumeSupported: true,
+    category: 'torrents',
+    infoHash: parsed.infoHash,
+    trackers: parsed.announce ?? [],
+    files,
+  };
+}
+
+export async function saveTorrentBufferToCache(
+  buf: Buffer,
+  cacheDir: string
+): Promise<{ filePath: string; probe: ProbeResult }> {
+  const probe = await parseTorrentBuffer(buf, '');
+  const safeHash = (probe.infoHash || '').toLowerCase().replace(/[^a-f0-9]/g, '');
+  if (!safeHash) {
+    throw new Error('Invalid torrent metadata (missing infoHash)');
+  }
+  await fs.promises.mkdir(cacheDir, { recursive: true });
+  const filePath = path.join(cacheDir, `${safeHash}.torrent`);
+  await fs.promises.writeFile(filePath, buf);
+  return {
+    filePath,
+    probe: { ...probe, source: filePath },
+  };
+}
+
 export async function probeTorrentSource(rawSource: string): Promise<ProbeResult> {
   const source = normalizeTorrentSource(rawSource);
 
@@ -56,40 +119,7 @@ export async function probeTorrentSource(rawSource: string): Promise<ProbeResult
   }
 
   const buf = await fs.promises.readFile(source);
-  const parsed = await parseTorrent(buf);
-  const checkRoot = path.resolve(path.sep, 'myload-torrent-root');
-  const files: TorrentFileInfo[] = (parsed.files ?? []).map((f, index) => {
-    const resolvedEntry = path.resolve(checkRoot, f.path);
-    if (!isPathInsideDir(checkRoot, resolvedEntry)) {
-      throw new Error(`Torrent contains unsafe file path: ${f.path}`);
-    }
-    return {
-      index,
-      name: f.name,
-      path: f.path,
-      length: f.length,
-      downloaded: 0,
-      selected: true,
-    };
-  });
-
-  const name = sanitizeFileName(parsed.name || path.basename(source, '.torrent'));
-  const totalBytes =
-    typeof parsed.length === 'number'
-      ? parsed.length
-      : files.reduce((sum, f) => sum + f.length, 0);
-
-  return {
-    kind: 'torrent',
-    source,
-    fileName: name,
-    totalBytes,
-    resumeSupported: true,
-    category: 'torrents',
-    infoHash: parsed.infoHash,
-    trackers: parsed.announce ?? [],
-    files,
-  };
+  return parseTorrentBuffer(buf, source);
 }
 
 export function normalizeTorrentSource(raw: string): string {
@@ -167,9 +197,15 @@ export class TorrentDownloadEngine {
       await fs.promises.mkdir(item.saveDir, { recursive: true });
       const client = await this.ensureClient();
 
+      const cachedTorrentPath =
+        item.torrent?.torrentFilePath && fs.existsSync(item.torrent.torrentFilePath)
+          ? item.torrent.torrentFilePath
+          : null;
       const sourceNorm = normalizeTorrentSource(item.source);
       let torrentInput: string | Buffer = sourceNorm;
-      if (!isMagnetUri(sourceNorm)) {
+      if (cachedTorrentPath) {
+        torrentInput = await fs.promises.readFile(cachedTorrentPath);
+      } else if (!isMagnetUri(sourceNorm)) {
         if (!fs.existsSync(sourceNorm)) {
           opts.onError(`Torrent file not found: ${sourceNorm}`);
           return;
@@ -348,6 +384,129 @@ export class TorrentDownloadEngine {
     return this.active.has(id);
   }
 
+  async probeMagnetMetadata(
+    magnetUri: string,
+    cacheDir?: string,
+    timeoutMs = 15000
+  ): Promise<ProbeResult> {
+    const basic = await probeTorrentSource(magnetUri);
+    const infoHash = (basic.infoHash || '').trim().toLowerCase();
+    if (!infoHash) return basic;
+
+    if (cacheDir) {
+      const cachedPath = path.join(cacheDir, `${infoHash}.torrent`);
+      if (fs.existsSync(cachedPath)) {
+        try {
+          const buf = await fs.promises.readFile(cachedPath);
+          const parsedCached = await parseTorrentBuffer(buf, magnetUri);
+          if (parsedCached.files && parsedCached.files.length > 0) {
+            return parsedCached;
+          }
+        } catch {
+        }
+      }
+    }
+
+    const metaTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'myload-meta-'));
+    const { default: WebTorrentCtor } = await import('webtorrent');
+    const tempClient = new WebTorrentCtor({
+      downloadLimit: 0,
+      uploadLimit: 0,
+      maxConns: 25,
+    });
+    tempClient.on('error', () => {});
+
+    try {
+      const result = await new Promise<ProbeResult>((resolve) => {
+        let settled = false;
+        const finish = (probe: ProbeResult) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(probe);
+        };
+
+        const timer = setTimeout(() => {
+          finish({
+            ...basic,
+            warning: 'Peer metadata timed out — files and folders will appear once peers connect.',
+          });
+        }, timeoutMs);
+
+        const torrent = tempClient.add(magnetUri, {
+          path: metaTmpDir,
+          deselect: true,
+        });
+
+        torrent.on('error', () => {
+          finish(basic);
+        });
+
+        const extractFromTorrent = async () => {
+          if (settled || torrent.destroyed) return;
+          const tBuf = torrent.torrentFile ? Buffer.from(torrent.torrentFile) : null;
+          if (tBuf && tBuf.length > 0 && cacheDir) {
+            try {
+              await saveTorrentBufferToCache(tBuf, cacheDir);
+            } catch {
+            }
+          }
+          const checkRoot = path.resolve(path.sep, 'myload-torrent-root');
+          const files: TorrentFileInfo[] = [];
+          for (let index = 0; index < (torrent.files ?? []).length; index += 1) {
+            const f = torrent.files[index];
+            const resolvedEntry = path.resolve(checkRoot, f.path);
+            if (!isPathInsideDir(checkRoot, resolvedEntry)) {
+              finish({
+                ...basic,
+                warning: `Blocked unsafe torrent path: ${f.path}`,
+              });
+              return;
+            }
+            files.push({
+              index,
+              name: f.name,
+              path: f.path,
+              length: f.length,
+              downloaded: 0,
+              selected: true,
+            });
+          }
+          const totalBytes = files.reduce((sum, f) => sum + f.length, 0);
+          finish({
+            kind: 'torrent',
+            source: magnetUri,
+            fileName: sanitizeFileName(torrent.name || basic.fileName),
+            totalBytes: files.length > 0 ? totalBytes : torrent.length || null,
+            resumeSupported: true,
+            category: 'torrents',
+            infoHash: torrent.infoHash || basic.infoHash,
+            trackers: torrent.announce?.length ? torrent.announce : basic.trackers,
+            files,
+          });
+        };
+
+        torrent.once('metadata', () => {
+          void extractFromTorrent();
+        });
+        torrent.once('ready', () => {
+          void extractFromTorrent();
+        });
+      });
+
+      return result;
+    } finally {
+      await new Promise<void>((resolve) => {
+        try {
+          tempClient.destroy(() => resolve());
+        } catch {
+          resolve();
+        }
+      });
+      await fs.promises.rm(metaTmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
   async destroyAll(): Promise<void> {
     this.cancelIdleDestroy();
     const ids = [...this.active.keys()];
@@ -410,7 +569,7 @@ export class TorrentDownloadEngine {
           name: file.name,
           path: file.path,
           length: file.length,
-          downloaded: Math.min(file.length, file.downloaded),
+          downloaded: Math.max(0, Math.min(file.length, Math.round(file.downloaded || 0))),
           selected: entry.selectedIndices === null || entry.selectedIndices.has(index),
         }))
       : item.torrent?.files ?? [];
@@ -420,7 +579,10 @@ export class TorrentDownloadEngine {
       ? selectedFiles.reduce((sum, f) => sum + f.length, 0)
       : item.totalBytes;
     const downloadedBytes = hasMetadata
-      ? selectedFiles.reduce((sum, f) => sum + Math.min(f.length, f.downloaded), 0)
+      ? selectedFiles.reduce(
+          (sum, f) => sum + Math.max(0, Math.min(f.length, Math.round(f.downloaded || 0))),
+          0
+        )
       : item.downloadedBytes;
 
     const allSelectedDone =
@@ -493,7 +655,7 @@ export class TorrentDownloadEngine {
       name: file.name,
       path: file.path,
       length: file.length,
-      downloaded: Math.min(file.length, file.downloaded),
+      downloaded: Math.max(0, Math.min(file.length, Math.round(file.downloaded || 0))),
       selected: entry.selectedIndices === null || entry.selectedIndices.has(index),
     }));
     const selectedFiles = files.filter((f) => f.selected);

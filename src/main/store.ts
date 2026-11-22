@@ -80,6 +80,10 @@ export function normalizeDownloadsOnLoad(
       errorMessage,
       schedule,
       priority: normalizeDownloadPriority(item.priority),
+      queueOrder:
+        typeof item.queueOrder === 'number' && Number.isFinite(item.queueOrder)
+          ? item.queueOrder
+          : undefined,
       downloadSpeed: 0,
       uploadSpeed: 0,
       etaSeconds: null,

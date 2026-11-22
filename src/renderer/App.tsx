@@ -9,6 +9,8 @@ import {
   computeArrowSelection,
   computeCheckboxSelection,
   computeRowClickSelection,
+  moveItemByDelta,
+  reorderByIndex,
   type RowClickModifiers,
 } from '../shared/selection';
 import type {
@@ -17,6 +19,7 @@ import type {
   CategoryId,
   CustomThemeColors,
   DownloadItem,
+  DownloadPriority,
   DownloadSchedule,
   PowerAction,
   QueueMode,
@@ -512,7 +515,8 @@ export function App() {
 
   const isExternalDrop = (e: React.DragEvent) =>
     !e.dataTransfer.types.includes('application/x-myload-tab') &&
-    !e.dataTransfer.types.includes('application/x-myload-multipart');
+    !e.dataTransfer.types.includes('application/x-myload-multipart') &&
+    !e.dataTransfer.types.includes('application/x-myload-row');
 
   const handleDragEnter = (e: React.DragEvent) => {
     if (!isExternalDrop(e)) return;
@@ -615,6 +619,44 @@ export function App() {
       }
     }
   };
+
+  const handleSetPriority = useCallback(
+    (id: string, priority: DownloadPriority) => {
+      void window.myload.setDownloadPriority(id, priority);
+      announce(`Priority set to ${priority}`);
+    },
+    [announce]
+  );
+
+  const commitReorderedVisible = useCallback(
+    (reorderedVisible: DownloadItem[]) => {
+      const visibleSet = new Set(reorderedVisible.map((d) => d.id));
+      const restIds = downloads.filter((d) => !visibleSet.has(d.id)).map((d) => d.id);
+      const nextIds = [...reorderedVisible.map((d) => d.id), ...restIds];
+      setSortBy('queue');
+      void window.myload.reorderDownloads(nextIds);
+    },
+    [downloads]
+  );
+
+  const handleReorderRows = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      const nextVisible = reorderByIndex(visibleDownloads, fromIndex, toIndex);
+      commitReorderedVisible(nextVisible);
+    },
+    [visibleDownloads, commitReorderedVisible]
+  );
+
+  const handleMoveRow = useCallback(
+    (id: string, delta: -1 | 1) => {
+      const idx = visibleDownloads.findIndex((d) => d.id === id);
+      if (idx === -1) return;
+      const nextVisible = moveItemByDelta(visibleDownloads, idx, delta);
+      if (nextVisible === visibleDownloads) return;
+      commitReorderedVisible(nextVisible);
+    },
+    [visibleDownloads, commitReorderedVisible]
+  );
 
   return (
     <div
@@ -808,6 +850,9 @@ export function App() {
             announce('Source link copied to clipboard');
           }}
           onOpenSchedule={(item) => setScheduleModalItem(item)}
+          onSetPriority={handleSetPriority}
+          onReorderRows={handleReorderRows}
+          onMoveRow={handleMoveRow}
           onOpenAddModal={() => {
             setAddModalRequest(undefined);
             setAddModalOpen(true);

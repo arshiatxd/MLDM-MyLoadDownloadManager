@@ -16,7 +16,8 @@ import type { LogManager } from './logger';
 import { BRIDGE_PORT_CANDIDATES } from './native-host';
 import { isAllowedExtensionOrigin, sanitizeHeaderValue } from './security';
 
-const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_INTERCEPT_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_MEDIA_BODY_BYTES = 256 * 1024;
 const CLIENT_HEADER = 'x-myload-client';
 const EXPECTED_CLIENT = 'myload-extension';
@@ -212,7 +213,7 @@ export class BrowserBridgeServer {
       this.sendJson(res, 200, {
         ok: true,
         app: 'MyLoad',
-        version: '1.0.13',
+        version: '1.0.14',
         ...health,
       });
       return;
@@ -227,7 +228,7 @@ export class BrowserBridgeServer {
     if (req.method === 'POST' && reqUrl.pathname === '/api/v1/intercept') {
       let bodyText: string;
       try {
-        bodyText = await readBodyLimited(req, MAX_BODY_BYTES);
+        bodyText = await readBodyLimited(req, MAX_INTERCEPT_BODY_BYTES);
       } catch (err) {
         if (err instanceof PayloadTooLargeError) {
           this.sendJson(res, 413, { ok: false, error: 'Payload too large' });
@@ -282,6 +283,14 @@ export class BrowserBridgeServer {
         typeof parsed.userAgent === 'string'
           ? sanitizeHeaderValue(parsed.userAgent, 512) ?? undefined
           : undefined;
+      const rawTorrentB64 =
+        typeof parsed.torrentDataBase64 === 'string' ? parsed.torrentDataBase64.trim() : '';
+      const safeTorrentB64 =
+        rawTorrentB64 &&
+        rawTorrentB64.length <= 14 * 1024 * 1024 &&
+        /^[A-Za-z0-9+/=]+$/.test(rawTorrentB64)
+          ? rawTorrentB64
+          : undefined;
 
       const payload: BrowserInterceptPayload = {
         url: rawUrl,
@@ -297,6 +306,7 @@ export class BrowserBridgeServer {
           typeof parsed.mime === 'string' && parsed.mime.trim()
             ? parsed.mime.trim()
             : undefined,
+        torrentDataBase64: safeTorrentB64,
         relatedParts: relatedParts.length > 0 ? relatedParts : undefined,
       };
 

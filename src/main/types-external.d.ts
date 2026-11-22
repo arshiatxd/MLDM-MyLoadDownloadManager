@@ -56,6 +56,7 @@ declare module 'webtorrent' {
     destroyed: boolean;
     paused: boolean;
     announce: string[];
+    torrentFile?: Uint8Array;
     pieces?: unknown[];
     files: WebTorrentFile[];
     wires: Array<{

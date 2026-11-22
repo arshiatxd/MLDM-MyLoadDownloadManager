@@ -122,6 +122,14 @@ export function registerIpcHandlers(params: {
     (_e, id: string, schedule: DownloadSchedule | null) =>
       manager.updateDownloadSchedule(id, schedule)
   );
+  ipcMain.handle(
+    'myload:set-priority',
+    (_e, id: string, priority: 'high' | 'normal' | 'low') =>
+      manager.setDownloadPriority(id, priority)
+  );
+  ipcMain.handle('myload:reorder-downloads', (_e, orderedIds: string[]) =>
+    manager.reorderDownloads(orderedIds)
+  );
   ipcMain.handle('myload:update-settings', (_e, patch: Partial<AppSettings>) =>
     manager.updateSettings(patch)
   );

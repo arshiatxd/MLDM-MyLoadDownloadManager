@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import createTorrent from 'create-torrent';
@@ -9,8 +10,10 @@ import {
   TorrentDownloadEngine,
   probeTorrentSource,
   resolveTorrentTargetPath,
+  saveTorrentBufferToCache,
 } from '../src/main/torrent-engine';
 import { buildTorrentTree } from '../src/shared/torrent-tree';
+import type { BrowserInterceptPayload } from '../src/shared/types';
 
 describe('torrent probing', () => {
   let tmpDir: string;
@@ -185,6 +188,99 @@ describe('torrent probing', () => {
       expect(fs.existsSync(folderTarget)).toBe(false);
     } finally {
       await manager.shutdown();
+    }
+  });
+
+  it('resolves base64 .torrent browser intercepts and remote .torrent URLs into cached local torrents with full file tree', async () => {
+    const contentDir = path.join(tmpDir, 'Distro');
+    await fs.promises.mkdir(path.join(contentDir, 'iso'), { recursive: true });
+    await fs.promises.writeFile(path.join(contentDir, 'iso', 'linux.iso'), Buffer.alloc(4096, 1));
+    await fs.promises.writeFile(path.join(contentDir, 'CHECKSUMS.txt'), 'abc123');
+
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        contentDir,
+        { name: 'Distro' },
+        (err: Error | null, buf: Buffer) => {
+          if (err) reject(err);
+          else resolve(buf);
+        }
+      );
+    });
+
+    const cached = await saveTorrentBufferToCache(torrentBuf, path.join(tmpDir, 'cache'));
+    expect(fs.existsSync(cached.filePath)).toBe(true);
+    expect(cached.probe.files).toHaveLength(2);
+
+    const server = http.createServer((req, res) => {
+      if (req.url === '/release.torrent') {
+        res.writeHead(200, {
+          'Content-Type': 'application/x-bittorrent',
+          'Content-Length': String(torrentBuf.length),
+        });
+        if (req.method === 'HEAD') res.end();
+        else res.end(torrentBuf);
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+
+    const capturedPayloads: BrowserInterceptPayload[] = [];
+    const manager = new DownloadManager({
+      stateFilePath: path.join(tmpDir, 'state-intercept.json'),
+      logFilePath: null,
+      defaultDownloadDir: tmpDir,
+      enableBridge: false,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => undefined,
+        executeSystemAction: async () => undefined,
+      },
+      callbacks: {
+        onOpenCompactPopup: (session) => {
+          if (session.initialPayload) capturedPayloads.push(session.initialPayload);
+        },
+      },
+    });
+    manager.start();
+
+    try {
+      await manager.updateSettings({
+        useCompactDownloadPopup: true,
+        showConfirmationDialog: true,
+        autoDownloadOnClick: false,
+      });
+
+      const handleIntercept = (
+        manager as unknown as {
+          handleBrowserIntercept: (p: BrowserInterceptPayload) => Promise<'confirm' | 'started'>;
+        }
+      ).handleBrowserIntercept.bind(manager);
+
+      const mode = await handleIntercept({
+        url: 'https://tracker.example/Distro.torrent',
+        fileName: 'Distro.torrent',
+        mime: 'application/x-bittorrent',
+        torrentDataBase64: Buffer.from(torrentBuf).toString('base64'),
+      });
+      expect(mode).toBe('confirm');
+      expect(manager.getSnapshot().logs.filter((l) => l.level === 'warn')).toEqual([]);
+      expect(capturedPayloads).toHaveLength(1);
+      expect(capturedPayloads[0].url).toBe(
+        path.join(tmpDir, 'torrents', `${cached.probe.infoHash}.torrent`)
+      );
+      expect(fs.existsSync(capturedPayloads[0].url)).toBe(true);
+      expect(capturedPayloads[0].torrentDataBase64).toBeUndefined();
+
+      const httpProbe = await manager.probeSource(`http://127.0.0.1:${port}/release.torrent`);
+      expect(httpProbe.kind).toBe('torrent');
+      expect(httpProbe.files).toHaveLength(2);
+      expect(httpProbe.totalBytes).toBe(4096 + 6);
+    } finally {
+      await manager.shutdown();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 });

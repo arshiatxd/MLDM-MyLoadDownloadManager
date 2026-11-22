@@ -6,12 +6,14 @@ interface DirectoryStatusBannerProps {
   validation: DirectoryValidationResult | null;
   checking?: boolean;
   compact?: boolean;
+  hideOk?: boolean;
 }
 
 export function DirectoryStatusBanner({
   validation,
   checking = false,
   compact = false,
+  hideOk = false,
 }: DirectoryStatusBannerProps) {
   if (checking && !validation) {
     return (
@@ -53,6 +55,8 @@ export function DirectoryStatusBanner({
       </div>
     );
   }
+
+  if (hideOk) return null;
 
   if (validation.diskSpace) {
     return (

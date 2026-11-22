@@ -102,7 +102,7 @@ export type FileCategory =
 
 export type CategoryId = 'all' | 'active' | 'completed' | FileCategory;
 
-export type SortBy = 'newest' | 'oldest' | 'name' | 'size' | 'progress' | 'status';
+export type SortBy = 'newest' | 'oldest' | 'name' | 'size' | 'progress' | 'status' | 'queue';
 
 export interface SegmentInfo {
   index: number;
@@ -158,6 +158,7 @@ export interface DownloadItem {
   retryCount: number;
   schedule?: DownloadSchedule;
   priority?: DownloadPriority;
+  queueOrder?: number;
 }
 
 export type SpeedUnit = 'KB/s' | 'MB/s';
@@ -311,6 +312,7 @@ export interface BrowserInterceptPayload {
   userAgent?: string;
   fileSize?: number | null;
   mime?: string;
+  torrentDataBase64?: string;
   relatedParts?: Array<{ url: string; fileName?: string }>;
   socialRequest?: SocialDownloadRequest;
 }
@@ -439,6 +441,8 @@ export interface MyLoadApi {
   resumeAll: () => Promise<void>;
   updateTorrentFiles: (id: string, selectedIndices: number[]) => Promise<void>;
   updateDownloadSchedule: (id: string, schedule: DownloadSchedule | null) => Promise<DownloadItem | null>;
+  setDownloadPriority: (id: string, priority: DownloadPriority) => Promise<void>;
+  reorderDownloads: (orderedIds: string[]) => Promise<void>;
   updateSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
   resetSettings: () => Promise<AppSettings>;
   clearLogs: () => Promise<void>;

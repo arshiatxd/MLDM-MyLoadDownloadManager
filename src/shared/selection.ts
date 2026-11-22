@@ -223,3 +223,21 @@ export function sortItemsByPriority<T extends { priority?: DownloadPriority }>(
   );
 }
 
+export function sortQueuedForScheduling<
+  T extends { priority?: DownloadPriority; queueOrder?: number },
+>(fifoItems: readonly T[]): T[] {
+  return fifoItems
+    .map((item, fifoIndex) => ({ item, fifoIndex }))
+    .sort((a, b) => {
+      const prioDiff = getPriorityRank(b.item.priority) - getPriorityRank(a.item.priority);
+      if (prioDiff !== 0) return prioDiff;
+      const aHas = typeof a.item.queueOrder === 'number' && Number.isFinite(a.item.queueOrder);
+      const bHas = typeof b.item.queueOrder === 'number' && Number.isFinite(b.item.queueOrder);
+      if (aHas && bHas && a.item.queueOrder !== b.item.queueOrder) {
+        return a.item.queueOrder! - b.item.queueOrder!;
+      }
+      return a.fifoIndex - b.fifoIndex;
+    })
+    .map((entry) => entry.item);
+}
+

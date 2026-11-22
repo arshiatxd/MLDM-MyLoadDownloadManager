@@ -83,6 +83,13 @@ export function sortDownloads(items: DownloadItem[], sortBy: SortBy): DownloadIt
       };
       return copy.sort((a, b) => rank[a.status] - rank[b.status] || b.addedAt - a.addedAt);
     }
+    case 'queue':
+      return copy.sort((a, b) => {
+        const ao = typeof a.queueOrder === 'number' && Number.isFinite(a.queueOrder) ? a.queueOrder : Number.MAX_SAFE_INTEGER;
+        const bo = typeof b.queueOrder === 'number' && Number.isFinite(b.queueOrder) ? b.queueOrder : Number.MAX_SAFE_INTEGER;
+        if (ao !== bo) return ao - bo;
+        return b.addedAt - a.addedAt;
+      });
     default:
       return copy;
   }

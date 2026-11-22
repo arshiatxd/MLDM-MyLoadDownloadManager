@@ -604,23 +604,48 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             e.preventDefault();
             void handleConfirmDownload(false);
           }}
-          className="animate-modal-in flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3 text-[13px]"
+          className="animate-modal-in flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3 text-[13px]"
         >
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/70 px-3 py-2">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/65 px-3 py-2.5 space-y-1.5">
             <div className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]" title={source}>
               {source}
             </div>
             {socialRequest && (
-              <div className="mt-1 text-[11px] font-medium text-[var(--accent-text)]">
+              <div className="text-[11px] font-medium text-[var(--accent-text)]">
                 {formatSocialRequestSummary(socialRequest)}
               </div>
             )}
-            {probing && (
-              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--accent-text)]">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                <span>Checking server metadata...</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]">
+              <div className="flex items-center gap-3">
+                <span>
+                  Size: <strong className="text-[var(--text-primary)]">{formatBytes(totalDisplayBytes)}</strong>
+                </span>
+                <span>
+                  Free:{' '}
+                  <strong
+                    className={
+                      dirValidation?.errorCode === 'DISK_FULL'
+                        ? 'text-[var(--danger)]'
+                        : 'text-[var(--text-primary)]'
+                    }
+                  >
+                    {dirValidation?.diskSpace
+                      ? formatBytes(dirValidation.diskSpace.freeBytes)
+                      : 'Unknown'}
+                  </strong>
+                </span>
               </div>
-            )}
+              {probing && (
+                <span className="inline-flex items-center gap-1.5 text-[var(--accent-text)]">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>
+                    {detectedKind === 'torrent'
+                      ? 'Fetching torrent files from peers...'
+                      : 'Checking metadata...'}
+                  </span>
+                </span>
+              )}
+            </div>
           </div>
 
           <MultiPartPromptCard
@@ -650,100 +675,88 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             }
           />
 
-          <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <label className="text-xs font-medium text-[var(--text-secondary)]">
-                {t(settings.language, 'saveTo')}
-              </label>
-              {hasCustomCategoryDir && !saveDirTouched && (
-                <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--accent-text)]">
-                  Auto-routed: {FILE_CATEGORY_META[detectedCategory].label}
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/45 p-3 space-y-2.5">
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-[var(--text-secondary)]">
+                  {t(settings.language, 'saveTo')}
+                </label>
+                {hasCustomCategoryDir && !saveDirTouched && (
+                  <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--accent-text)]">
+                    Auto-routed: {FILE_CATEGORY_META[detectedCategory].label}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={saveDir}
+                  onChange={(e) => {
+                    setSaveDir(e.target.value);
+                    setSaveDirTouched(true);
+                  }}
+                  className="ml-input h-8 flex-1 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleBrowseFolder()}
+                  aria-label="Browse folder"
+                  className="inline-flex h-8 w-9 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </button>
+              </div>
+              <label className="mt-1.5 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--text-primary)]">
+                <input
+                  type="checkbox"
+                  checked={alwaysUseDir}
+                  onChange={(e) => setAlwaysUseDir(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--accent)]"
+                />
+                <span>
+                  {settings.folderRoutingMode === 'per-category'
+                    ? `Always use this folder for ${FILE_CATEGORY_META[detectedCategory].label}`
+                    : t(settings.language, 'alwaysFolder')}
                 </span>
-              )}
+              </label>
+              <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} compact hideOk />
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={saveDir}
-                onChange={(e) => {
-                  setSaveDir(e.target.value);
-                  setSaveDirTouched(true);
-                }}
-                className="ml-input h-8 flex-1 text-xs"
-              />
-              <button
-                type="button"
-                onClick={() => void handleBrowseFolder()}
-                aria-label="Browse folder"
-                className="inline-flex h-8 w-9 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </button>
-            </div>
-            <label className="mt-1.5 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--text-primary)]">
-              <input
-                type="checkbox"
-                checked={alwaysUseDir}
-                onChange={(e) => setAlwaysUseDir(e.target.checked)}
-                className="h-3.5 w-3.5 accent-[var(--accent)]"
-              />
-              <span>
-                {settings.folderRoutingMode === 'per-category'
-                  ? `Always use this folder for ${FILE_CATEGORY_META[detectedCategory].label}`
-                  : t(settings.language, 'alwaysFolder')}
-              </span>
-            </label>
-            <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} compact />
+
+            {!(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
+                  {t(settings.language, 'fileName')}
+                </label>
+                <input
+                  type="text"
+                  value={fileName}
+                  onChange={(e) => setFileName(e.target.value)}
+                  className="ml-input h-8 text-xs"
+                />
+                {fileNameWarning && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--warning)]">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{fileNameWarning}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {!(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                {t(settings.language, 'fileName')}
-              </label>
-              <input
-                type="text"
-                value={fileName}
-                onChange={(e) => setFileName(e.target.value)}
-                className="ml-input h-8 text-xs"
-              />
-              {fileNameWarning && (
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--warning)]">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>{fileNameWarning}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {torrentFiles.length > 0 && (
+          {torrentFiles.length > 0 ? (
             <TorrentFileTree
               compact
               files={torrentFiles}
               selectedIndices={selectedFileIndices}
               onChangeSelection={setSelectedFileIndices}
             />
+          ) : (
+            probe?.warning && (
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/55 px-3 py-2 text-[11.5px] text-[var(--text-secondary)]">
+                {probe.warning}
+              </div>
+            )
           )}
-
-          <div className="flex items-center justify-between text-[11.5px] text-[var(--text-secondary)]">
-            <span>
-              Size: <strong className="text-[var(--text-primary)]">{formatBytes(totalDisplayBytes)}</strong>
-            </span>
-            <span>
-              Free disk:{' '}
-              <strong
-                className={
-                  dirValidation?.errorCode === 'DISK_FULL'
-                    ? 'text-[var(--danger)]'
-                    : 'text-[var(--text-primary)]'
-                }
-              >
-                {dirValidation?.diskSpace
-                  ? formatBytes(dirValidation.diskSpace.freeBytes)
-                  : 'Unknown'}
-              </strong>
-            </span>
-          </div>
 
           {settings.showScheduleInPopup && (
             <ScheduleControlsCard
@@ -754,7 +767,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
           )}
 
           {errorMsg && (
-            <div className="flex items-center gap-1.5 text-xs text-[var(--danger)]">
+            <div className="flex items-center gap-1.5 rounded-xl border border-[var(--danger)]/40 bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span>{errorMsg}</span>
             </div>
@@ -786,65 +799,67 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
           </div>
         </form>
       ) : (
-        <div className="animate-modal-in flex min-h-0 flex-1 flex-col justify-between px-4 py-3 text-[13px]">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-[var(--text-primary)]">
-                  {primaryItem?.name ?? 'Starting download...'}
+        <div className="animate-modal-in flex min-h-0 flex-1 flex-col justify-between gap-2.5 px-4 py-3 text-[13px]">
+          <div className="space-y-2.5 overflow-y-auto pr-0.5">
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/55 p-3 space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                    {primaryItem?.name ?? 'Starting download...'}
+                  </div>
+                  <div className="truncate text-[11.5px] text-[var(--text-secondary)]">
+                    {trackedItems.length > 1
+                      ? `${batchSummary.completed}/${trackedItems.length} parts completed`
+                      : primaryItem?.saveDir ?? ''}
+                  </div>
                 </div>
-                <div className="truncate text-[11.5px] text-[var(--text-secondary)]">
-                  {trackedItems.length > 1
-                    ? `${batchSummary.completed}/${trackedItems.length} parts completed`
-                    : primaryItem?.saveDir ?? ''}
-                </div>
-              </div>
-              <span
-                className="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase"
-                style={{
-                  backgroundColor: allCompleted ? 'var(--success-soft)' : 'var(--accent-soft)',
-                  color: allCompleted ? 'var(--success)' : 'var(--accent-text)',
-                }}
-              >
-                {primaryItem?.status ?? 'probing'}
-              </span>
-            </div>
-
-            <div>
-              <div className="mb-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
-                <span>
-                  {primaryItem
-                    ? `${formatBytes(primaryItem.downloadedBytes)} / ${formatBytes(primaryItem.totalBytes)}`
-                    : 'Connecting...'}
-                </span>
-                <span className="font-mono font-semibold text-[var(--text-primary)]">
-                  {batchSummary.pct}%
-                </span>
-              </div>
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-canvas)] border border-[var(--border-subtle)]">
-                <div
-                  className="h-full rounded-full transition-all duration-200"
+                <span
+                  className="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase"
                   style={{
-                    width: `${Math.max(2, Math.min(100, batchSummary.pct))}%`,
-                    backgroundColor: allCompleted ? 'var(--success)' : 'var(--accent)',
+                    backgroundColor: allCompleted ? 'var(--success-soft)' : 'var(--accent-soft)',
+                    color: allCompleted ? 'var(--success)' : 'var(--accent-text)',
                   }}
-                />
+                >
+                  {primaryItem?.status ?? 'probing'}
+                </span>
               </div>
-            </div>
 
-            <div className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
-              <span className="font-mono">
-                Speed:{' '}
-                <strong className="text-[var(--text-primary)]">
-                  {formatSpeed(batchSummary.speed)}
-                </strong>
-              </span>
-              <span className="font-mono">
-                ETA:{' '}
-                <strong className="text-[var(--text-primary)]">
-                  {primaryItem ? formatEta(primaryItem.etaSeconds) : '—'}
-                </strong>
-              </span>
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
+                  <span>
+                    {primaryItem
+                      ? `${formatBytes(primaryItem.downloadedBytes)} / ${formatBytes(primaryItem.totalBytes)}`
+                      : 'Connecting...'}
+                  </span>
+                  <span className="font-mono font-semibold text-[var(--text-primary)]">
+                    {batchSummary.pct}%
+                  </span>
+                </div>
+                <div className="h-2.5 w-full overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
+                  <div
+                    className="h-full rounded-full transition-all duration-200"
+                    style={{
+                      width: `${Math.max(2, Math.min(100, batchSummary.pct))}%`,
+                      backgroundColor: allCompleted ? 'var(--success)' : 'var(--accent)',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
+                <span className="font-mono">
+                  Speed:{' '}
+                  <strong className="text-[var(--text-primary)]">
+                    {formatSpeed(batchSummary.speed)}
+                  </strong>
+                </span>
+                <span className="font-mono">
+                  ETA:{' '}
+                  <strong className="text-[var(--text-primary)]">
+                    {primaryItem ? formatEta(primaryItem.etaSeconds) : '—'}
+                  </strong>
+                </span>
+              </div>
             </div>
 
             {primaryItem && primaryItem.kind === 'http' && primaryItem.segments.length > 1 && (

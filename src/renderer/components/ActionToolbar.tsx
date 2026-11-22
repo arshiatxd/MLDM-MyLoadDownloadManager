@@ -63,6 +63,7 @@ interface ActionToolbarProps {
 const SORT_OPTIONS: Array<{ value: SortBy; label: string }> = [
   { value: 'newest', label: 'Newest' },
   { value: 'oldest', label: 'Oldest' },
+  { value: 'queue', label: 'Queue order' },
   { value: 'name', label: 'Name (A–Z)' },
   { value: 'size', label: 'Size' },
   { value: 'progress', label: 'Progress' },

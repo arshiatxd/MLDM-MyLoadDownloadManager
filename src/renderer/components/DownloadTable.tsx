@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   Archive,
+  ArrowDown,
+  ArrowUp,
   Clock,
   Copy,
   DownloadCloud,
@@ -9,6 +11,7 @@ import {
   FileText,
   Film,
   FolderOpen,
+  GripVertical,
   Image as ImageIcon,
   Info,
   Magnet,
@@ -28,8 +31,14 @@ import {
   formatSpeed,
 } from '../../shared/constants';
 import { t } from '../../shared/i18n';
-import type { RowClickModifiers } from '../../shared/selection';
-import type { AppLanguage, CategoryId, DownloadItem, FileCategory } from '../../shared/types';
+import { cycleDownloadPriority, type RowClickModifiers } from '../../shared/selection';
+import type {
+  AppLanguage,
+  CategoryId,
+  DownloadItem,
+  DownloadPriority,
+  FileCategory,
+} from '../../shared/types';
 
 interface DownloadTableProps {
   lang: AppLanguage;
@@ -52,6 +61,9 @@ interface DownloadTableProps {
   onRequestRemove: (ids: string[], deleteFilesDefault?: boolean) => void;
   onCopySource: (source: string) => void;
   onOpenSchedule: (item: DownloadItem) => void;
+  onSetPriority: (id: string, priority: DownloadPriority) => void;
+  onReorderRows: (fromIndex: number, toIndex: number) => void;
+  onMoveRow: (id: string, delta: -1 | 1) => void;
   onOpenAddModal: () => void;
 }
 
@@ -102,8 +114,11 @@ function getStatusBadge(item: DownloadItem): { label: string; colorVar: string }
 interface DownloadRowProps {
   item: DownloadItem;
   index: number;
+  totalCount: number;
   isSelected: boolean;
   isFocused: boolean;
+  isDragging: boolean;
+  isDropTarget: boolean;
   onToggleSelect: (id: string, shiftKey?: boolean) => void;
   onRowClick: (id: string, modifiers: RowClickModifiers) => void;
   onFocusItem: (id: string) => void;
@@ -113,14 +128,24 @@ interface DownloadRowProps {
   onRetry: (id: string) => void;
   onOpenFile: (item: DownloadItem) => void;
   onShowInFolder: (item: DownloadItem) => void;
+  onSetPriority: (id: string, priority: DownloadPriority) => void;
+  onMoveRow: (id: string, delta: -1 | 1) => void;
+  onDragStartRow: (index: number, e: React.DragEvent) => void;
+  onDragOverRow: (index: number, e: React.DragEvent) => void;
+  onDragLeaveRow: (index: number, e: React.DragEvent) => void;
+  onDropRow: (index: number, e: React.DragEvent) => void;
+  onDragEndRow: () => void;
   onOpenContextMenu: (item: DownloadItem, x: number, y: number) => void;
 }
 
 const DownloadRow = memo(function DownloadRow({
   item,
   index,
+  totalCount,
   isSelected,
   isFocused,
+  isDragging,
+  isDropTarget,
   onToggleSelect,
   onRowClick,
   onFocusItem,
@@ -130,6 +155,13 @@ const DownloadRow = memo(function DownloadRow({
   onRetry,
   onOpenFile,
   onShowInFolder,
+  onSetPriority,
+  onMoveRow,
+  onDragStartRow,
+  onDragOverRow,
+  onDragLeaveRow,
+  onDropRow,
+  onDragEndRow,
   onOpenContextMenu,
 }: DownloadRowProps) {
   const checkboxShiftRef = useRef(false);
@@ -143,10 +175,17 @@ const DownloadRow = memo(function DownloadRow({
     item.status === 'seeding';
   const scheduleLabel =
     item.status !== 'completed' ? formatScheduleSummary(item.schedule) : null;
+  const currentPriority: DownloadPriority = item.priority ?? 'normal';
 
   return (
     <tr
       data-download-id={item.id}
+      draggable
+      onDragStart={(e) => onDragStartRow(index, e)}
+      onDragOver={(e) => onDragOverRow(index, e)}
+      onDragLeave={(e) => onDragLeaveRow(index, e)}
+      onDrop={(e) => onDropRow(index, e)}
+      onDragEnd={onDragEndRow}
       onMouseDown={(e) => {
         if (e.shiftKey) e.preventDefault();
       }}
@@ -167,11 +206,17 @@ const DownloadRow = memo(function DownloadRow({
         onFocusItem(item.id);
         onOpenContextMenu(item, e.clientX, e.clientY);
       }}
-      className={`animate-row-enter group select-none border-b border-[var(--border-subtle)]/70 transition-colors last:border-b-0 ${
-        isFocused || isSelected
+      className={`animate-row-enter group select-none border-b transition-colors last:border-b-0 ${
+        isDropTarget
+          ? 'border-[var(--accent)] bg-[var(--accent-soft)]/45'
+          : 'border-[var(--border-subtle)]/70'
+      } ${
+        !isDropTarget && (isFocused || isSelected)
           ? 'bg-[var(--bg-selected)]'
-          : 'hover:bg-[var(--bg-hover)]/65'
-      }`}
+          : !isDropTarget
+            ? 'hover:bg-[var(--bg-hover)]/65'
+            : ''
+      } ${isDragging ? 'opacity-50' : ''}`}
     >
       <td
         className="px-3 py-2.5"
@@ -196,7 +241,13 @@ const DownloadRow = memo(function DownloadRow({
       </td>
 
       <td className="py-2.5 text-center text-[12px] text-[var(--text-muted)]">
-        {index + 1}
+        <div className="inline-flex items-center justify-center gap-0.5">
+          <GripVertical
+            className="h-3.5 w-3.5 cursor-grab text-[var(--text-muted)] opacity-40 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
+            aria-hidden="true"
+          />
+          <span>{index + 1}</span>
+        </div>
       </td>
 
       <td className="max-w-[270px] py-2.5 pr-3">
@@ -207,15 +258,25 @@ const DownloadRow = memo(function DownloadRow({
               <div className="truncate font-medium text-[var(--text-primary)]" title={item.name}>
                 {item.name}
               </div>
-              {item.status !== 'completed' && item.priority === 'high' && (
-                <span className="shrink-0 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent-text)]">
-                  High
-                </span>
-              )}
-              {item.status !== 'completed' && item.priority === 'low' && (
-                <span className="shrink-0 rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                  Low
-                </span>
+              {item.status !== 'completed' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSetPriority(item.id, cycleDownloadPriority(currentPriority));
+                  }}
+                  title={`Priority: ${currentPriority} (click to cycle)`}
+                  aria-label={`Priority for ${item.name}: ${currentPriority}`}
+                  className={`shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition-opacity ${
+                    currentPriority === 'high'
+                      ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-text)]'
+                      : currentPriority === 'low'
+                        ? 'bg-[var(--bg-elevated)] font-medium text-[var(--text-muted)]'
+                        : 'bg-[var(--bg-elevated)] font-medium text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 focus:opacity-100'
+                  }`}
+                >
+                  {currentPriority === 'high' ? 'High' : currentPriority === 'low' ? 'Low' : 'Normal'}
+                </button>
               )}
             </div>
             {item.status === 'error' && item.errorMessage ? (
@@ -307,7 +368,31 @@ const DownloadRow = memo(function DownloadRow({
         className="py-2.5 pr-3 text-right"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="inline-flex items-center justify-end gap-1">
+        <div className="inline-flex items-center justify-end gap-0.5">
+          {totalCount > 1 && (
+            <>
+              <button
+                type="button"
+                disabled={index === 0}
+                onClick={() => onMoveRow(item.id, -1)}
+                title="Move up in queue"
+                aria-label={`Move ${item.name} up`}
+                className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={index === totalCount - 1}
+                onClick={() => onMoveRow(item.id, 1)}
+                title="Move down in queue"
+                aria-label={`Move ${item.name} down`}
+                className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
           {item.status === 'error' ? (
             <button
               type="button"
@@ -401,6 +486,9 @@ export function DownloadTable({
   onRequestRemove,
   onCopySource,
   onOpenSchedule,
+  onSetPriority,
+  onReorderRows,
+  onMoveRow,
   onOpenAddModal,
 }: DownloadTableProps) {
   const [contextMenu, setContextMenu] = useState<{
@@ -408,6 +496,8 @@ export function DownloadTable({
     x: number;
     y: number;
   } | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const [dropzoneHeight, setDropzoneHeight] = useState<number>(() => {
     try {
@@ -452,11 +542,48 @@ export function DownloadTable({
   }, [contextMenu]);
 
   const openContextMenuAt = (item: DownloadItem, clientX: number, clientY: number) => {
-    const menuWidth = 224;
-    const menuHeight = 375;
+    const menuWidth = 232;
+    const menuHeight = 460;
     const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8));
     const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8));
     setContextMenu({ item, x, y });
+  };
+
+  const handleDragStartRow = (idx: number, e: React.DragEvent) => {
+    setDragIndex(idx);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-myload-row', String(idx));
+    e.dataTransfer.setData('text/plain', items[idx]?.name ?? '');
+  };
+
+  const handleDragOverRow = (idx: number, e: React.DragEvent) => {
+    if (dragIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== idx) setDragOverIndex(idx);
+  };
+
+  const handleDragLeaveRow = (idx: number, e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null) && dragOverIndex === idx) {
+      setDragOverIndex(null);
+    }
+  };
+
+  const handleDropRow = (idx: number, e: React.DragEvent) => {
+    if (dragIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragIndex !== idx) {
+      onReorderRows(dragIndex, idx);
+    }
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEndRow = () => {
+    setDragIndex(null);
+    setDragOverIndex(null);
   };
 
   const allSelected = items.length > 0 && items.every((it) => selectedIds.has(it.id));
@@ -471,6 +598,7 @@ export function DownloadTable({
         ? [menuItem.id]
         : [];
   const isBulkRemove = menuRemoveIds.length > 1;
+  const menuItemIndex = menuItem ? items.findIndex((it) => it.id === menuItem.id) : -1;
   const menuIsRunning =
     menuItem !== null &&
     (menuItem.status === 'downloading' ||
@@ -503,7 +631,7 @@ export function DownloadTable({
                   className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
                 />
               </th>
-              <th className="w-8 py-2.5 text-center">#</th>
+              <th className="w-12 py-2.5 text-center">#</th>
               <th className="py-2.5 pr-3">{t(lang, 'colName')}</th>
               <th className="w-32 py-2.5 pr-3">{t(lang, 'colSize')}</th>
               <th className="w-44 py-2.5 pr-3">{t(lang, 'colStatus')}</th>
@@ -511,7 +639,7 @@ export function DownloadTable({
               <th className="w-24 py-2.5 pr-3">{t(lang, 'colDownload')}</th>
               <th className="w-24 py-2.5 pr-3">{t(lang, 'colUpload')}</th>
               <th className="w-20 py-2.5 pr-3">{t(lang, 'colAdded')}</th>
-              <th className="w-32 py-2.5 pr-3 text-right">{t(lang, 'colActions')}</th>
+              <th className="w-40 py-2.5 pr-3 text-right">{t(lang, 'colActions')}</th>
             </tr>
           </thead>
 
@@ -529,8 +657,11 @@ export function DownloadTable({
                 key={item.id}
                 item={item}
                 index={idx}
+                totalCount={items.length}
                 isSelected={selectedIds.has(item.id)}
                 isFocused={focusedId === item.id}
+                isDragging={dragIndex === idx}
+                isDropTarget={dragOverIndex === idx && dragIndex !== null && dragIndex !== idx}
                 onToggleSelect={onToggleSelect}
                 onRowClick={onRowClick}
                 onFocusItem={onFocusItem}
@@ -540,6 +671,13 @@ export function DownloadTable({
                 onRetry={onRetry}
                 onOpenFile={onOpenFile}
                 onShowInFolder={onShowInFolder}
+                onSetPriority={onSetPriority}
+                onMoveRow={onMoveRow}
+                onDragStartRow={handleDragStartRow}
+                onDragOverRow={handleDragOverRow}
+                onDragLeaveRow={handleDragLeaveRow}
+                onDropRow={handleDropRow}
+                onDragEndRow={handleDragEndRow}
                 onOpenContextMenu={openContextMenuAt}
               />
             ))}
@@ -752,23 +890,86 @@ export function DownloadTable({
           </button>
 
           {menuItem.status !== 'completed' && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                const target = menuItem;
-                setContextMenu(null);
-                onOpenSchedule(target);
-              }}
-              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-            >
-              <Clock className="h-4 w-4 text-[var(--accent-text)]" />
-              <span>
-                {menuItem.schedule?.startAt || menuItem.schedule?.stopAt
-                  ? 'Edit schedule...'
-                  : 'Schedule download...'}
-              </span>
-            </button>
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const target = menuItem;
+                  setContextMenu(null);
+                  onOpenSchedule(target);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+              >
+                <Clock className="h-4 w-4 text-[var(--accent-text)]" />
+                <span>
+                  {menuItem.schedule?.startAt || menuItem.schedule?.stopAt
+                    ? 'Edit schedule...'
+                    : 'Schedule download...'}
+                </span>
+              </button>
+
+              <div className="flex items-center justify-between gap-1.5 rounded-xl px-3 py-1.5 text-[12px] text-[var(--text-secondary)]">
+                <span>Priority</span>
+                <div className="flex items-center gap-1">
+                  {(['high', 'normal', 'low'] as const).map((lvl) => {
+                    const active = (menuItem.priority ?? 'normal') === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          const id = menuItem.id;
+                          setContextMenu(null);
+                          onSetPriority(id, lvl);
+                        }}
+                        className={`cursor-pointer rounded-md border px-1.5 py-0.5 text-[11px] capitalize ${
+                          active
+                            ? 'border-[var(--accent)] bg-[var(--accent-soft)] font-semibold text-[var(--accent-text)]'
+                            : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                        }`}
+                      >
+                        {lvl}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {items.length > 1 && menuItemIndex >= 0 && (
+            <div className="flex items-center gap-1 px-1.5 py-1">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={menuItemIndex === 0}
+                onClick={() => {
+                  const id = menuItem.id;
+                  setContextMenu(null);
+                  onMoveRow(id, -1);
+                }}
+                className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-1 text-[11.5px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Move up</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={menuItemIndex === items.length - 1}
+                onClick={() => {
+                  const id = menuItem.id;
+                  setContextMenu(null);
+                  onMoveRow(id, 1);
+                }}
+                className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-1 text-[11.5px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Move down</span>
+              </button>
+            </div>
           )}
 
           <div className="my-1 h-px bg-[var(--border-subtle)]" />

@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const MENU_ID = 'myload-download-link';
+const MAX_TORRENT_FETCH_BYTES = 10 * 1024 * 1024;
 
 async function getSettings() {
   const stored = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -62,15 +63,83 @@ function isSupportedInterceptUrl(url) {
   return /^https?:\/\//i.test(url) || /^magnet:\?xt=urn:btih:/i.test(url);
 }
 
-async function getCookieHeader(url) {
+function isTorrentCandidate(url, fileName, mime) {
+  if (/application\/x-bittorrent/i.test(mime || '')) return true;
+  if (/\.torrent$/i.test(fileName || '')) return true;
+  if (/\.torrent(?:$|[?#])/i.test(url || '')) return true;
+  if (/^magnet:\?xt=urn:btih:/i.test(url || '')) return true;
+  return false;
+}
+
+async function getMergedCookieHeader(primaryUrl, secondaryUrl) {
+  const urls = [];
+  if (primaryUrl && isHttpOrHttps(primaryUrl)) urls.push(primaryUrl);
+  if (secondaryUrl && secondaryUrl !== primaryUrl && isHttpOrHttps(secondaryUrl)) {
+    urls.push(secondaryUrl);
+  }
+  if (urls.length === 0) return undefined;
+
+  const map = new Map();
+  for (const url of urls) {
+    try {
+      const cookies = await chrome.cookies.getAll({ url });
+      for (const c of cookies || []) {
+        if (!map.has(c.name)) {
+          map.set(c.name, c.value);
+        }
+      }
+    } catch {
+    }
+  }
+  if (map.size === 0) return undefined;
+  return Array.from(map.entries())
+    .map(([name, val]) => `${name}=${val}`)
+    .join('; ');
+}
+
+function bytesToBase64(bytes) {
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
+async function fetchTorrentBase64(url) {
   if (!isHttpOrHttps(url)) return undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
   try {
-    const cookies = await chrome.cookies.getAll({ url });
-    if (!cookies || cookies.length === 0) return undefined;
-    return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const res = await fetch(url, {
+      credentials: 'include',
+      signal: controller.signal,
+    });
+    if (!res.ok) return undefined;
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    if (ctype.includes('text/html')) return undefined;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength <= 0 || buf.byteLength > MAX_TORRENT_FETCH_BYTES) return undefined;
+    const bytes = new Uint8Array(buf);
+    if (bytes[0] !== 0x64) return undefined;
+    return bytesToBase64(bytes);
   } catch {
     return undefined;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function getFallbackTabReferrer() {
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (activeTab && typeof activeTab.url === 'string' && isHttpOrHttps(activeTab.url)) {
+      return activeTab.url;
+    }
+  } catch {
+  }
+  return undefined;
 }
 
 function looksLikeMultiPartHint(url, fileName) {
@@ -140,9 +209,9 @@ async function collectRelatedPartsFromTab(tabId, targetUrl, fileName) {
   }
 }
 
-async function probeBridgePort(port) {
+async function probeBridgePort(port, timeoutMs = 350) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 550);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/health`, {
       headers: { 'X-MyLoad-Client': 'myload-extension' },
@@ -157,13 +226,12 @@ async function probeBridgePort(port) {
 }
 
 async function discoverBridgePort(preferredPort) {
-  const candidates = [preferredPort, ...BRIDGE_PORTS.filter((p) => p !== preferredPort)];
-  if (await probeBridgePort(candidates[0])) {
-    return candidates[0];
+  if (await probeBridgePort(preferredPort, 280)) {
+    return preferredPort;
   }
-  const rest = candidates.slice(1);
+  const rest = BRIDGE_PORTS.filter((p) => p !== preferredPort);
   const results = await Promise.all(
-    rest.map(async (p) => ((await probeBridgePort(p)) ? p : null))
+    rest.map(async (p) => ((await probeBridgePort(p, 350)) ? p : null))
   );
   const found = results.find((p) => p !== null) ?? null;
   if (found !== null) {
@@ -194,7 +262,7 @@ async function wakeNativeApp(preferredPort, focusMain = false) {
 
 async function sendToBridge(port, payload) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2500);
+  const timer = setTimeout(() => controller.abort(), 3000);
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/intercept`, {
       method: 'POST',
@@ -216,22 +284,23 @@ async function sendToBridge(port, payload) {
 }
 
 async function sendWithAutoLaunch(port, payload) {
-  const direct = await sendToBridge(port, payload);
-  if (direct.sent) return true;
-  if (direct.reachable) return false;
-
-  const discovered = await discoverBridgePort(port);
-  if (discovered !== null && discovered !== port) {
-    const viaDiscovered = await sendToBridge(discovered, payload);
-    if (viaDiscovered.sent) return true;
-    if (viaDiscovered.reachable) return false;
+  const activePort = await discoverBridgePort(port);
+  if (activePort !== null) {
+    const direct = await sendToBridge(activePort, payload);
+    if (direct.sent) return true;
+    if (direct.reachable) return false;
   }
 
   const wokenPort = await wakeNativeApp(port, false);
   if (wokenPort === null) return false;
 
   const viaWoken = await sendToBridge(wokenPort, payload);
-  return viaWoken.sent;
+  if (viaWoken.sent) return true;
+  if (viaWoken.reachable) return false;
+
+  await new Promise((r) => setTimeout(r, 300));
+  const retryWoken = await sendToBridge(wokenPort, payload);
+  return retryWoken.sent;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -248,6 +317,37 @@ chrome.storage.onChanged.addListener(() => {
   void syncBadge();
 });
 
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || message.type !== 'MYLOAD_INTERCEPT_LINK') return false;
+  const targetUrl = typeof message.url === 'string' ? message.url.trim() : '';
+  if (!targetUrl || !isSupportedInterceptUrl(targetUrl)) {
+    sendResponse({ ok: false });
+    return false;
+  }
+
+  void (async () => {
+    try {
+      const settings = await getSettings();
+      if (!settings.enabled || isDomainExcluded(targetUrl, settings.excludedDomains)) {
+        sendResponse({ ok: false });
+        return;
+      }
+      const cookie = await getMergedCookieHeader(targetUrl);
+      const ok = await sendWithAutoLaunch(settings.port, {
+        url: targetUrl,
+        referrer: typeof message.referrer === 'string' ? message.referrer : undefined,
+        cookie,
+        userAgent: navigator.userAgent,
+      });
+      sendResponse({ ok });
+    } catch {
+      sendResponse({ ok: false });
+    }
+  })();
+
+  return true;
+});
+
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== MENU_ID) return;
   const targetUrl = (info.linkUrl || info.srcUrl || '').trim();
@@ -255,9 +355,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
   void (async () => {
     const settings = await getSettings();
-    const [cookie, relatedParts] = await Promise.all([
-      getCookieHeader(targetUrl),
-      isHttpOrHttps(targetUrl) ? collectRelatedPartsFromTab(tab && typeof tab.id === 'number' ? tab.id : undefined, targetUrl) : Promise.resolve(undefined),
+    const torrentLike = isTorrentCandidate(targetUrl, undefined, undefined);
+    const [cookie, relatedParts, torrentDataBase64] = await Promise.all([
+      getMergedCookieHeader(targetUrl),
+      isHttpOrHttps(targetUrl) && !torrentLike
+        ? collectRelatedPartsFromTab(tab && typeof tab.id === 'number' ? tab.id : undefined, targetUrl)
+        : Promise.resolve(undefined),
+      torrentLike && isHttpOrHttps(targetUrl)
+        ? fetchTorrentBase64(targetUrl)
+        : Promise.resolve(undefined),
     ]);
     await sendWithAutoLaunch(settings.port, {
       url: targetUrl,
@@ -265,6 +371,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       cookie,
       userAgent: navigator.userAgent,
       relatedParts,
+      torrentDataBase64,
     });
   })();
 });
@@ -287,7 +394,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   }
 
   const targetUrl = (item.finalUrl || item.url || '').trim();
-  if (!isHttpOrHttps(targetUrl)) {
+  if (!isSupportedInterceptUrl(targetUrl)) {
     fallbackSuggest();
     return false;
   }
@@ -300,7 +407,10 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         return;
       }
 
+      const torrentLike = isTorrentCandidate(targetUrl, item.filename, item.mime);
+
       if (
+        !torrentLike &&
         settings.minSizeKb > 0 &&
         typeof item.fileSize === 'number' &&
         item.fileSize > 0 &&
@@ -315,19 +425,27 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         return;
       }
 
-      const [cookie, relatedParts] = await Promise.all([
-        getCookieHeader(targetUrl),
-        collectRelatedPartsFromTab(undefined, targetUrl, item.filename),
+      const [cookie, relatedParts, fallbackReferrer, torrentDataBase64] = await Promise.all([
+        getMergedCookieHeader(targetUrl, item.url),
+        isHttpOrHttps(targetUrl) && !torrentLike
+          ? collectRelatedPartsFromTab(undefined, targetUrl, item.filename)
+          : Promise.resolve(undefined),
+        item.referrer ? Promise.resolve(item.referrer) : getFallbackTabReferrer(),
+        torrentLike && isHttpOrHttps(targetUrl)
+          ? fetchTorrentBase64(targetUrl)
+          : Promise.resolve(undefined),
       ]);
+
       const ok = await sendWithAutoLaunch(settings.port, {
         url: targetUrl,
         fileName: item.filename || undefined,
-        referrer: item.referrer || undefined,
+        referrer: item.referrer || fallbackReferrer || undefined,
         cookie,
         userAgent: navigator.userAgent,
         fileSize: typeof item.fileSize === 'number' && item.fileSize >= 0 ? item.fileSize : null,
         mime: item.mime || undefined,
         relatedParts,
+        torrentDataBase64,
       });
 
       if (!ok) {

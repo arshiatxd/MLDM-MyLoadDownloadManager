@@ -5,7 +5,7 @@ import { runNativeHostBridge } from './native-host';
 const executablePath = (process.env.MYLOAD_LAUNCH_EXE || process.execPath).trim();
 const userDataDir = (
   process.env.MYLOAD_USER_DATA_DIR ||
-  path.join(process.env.APPDATA || os.tmpdir(), 'MyLoad Download Manager')
+  path.join(process.env.APPDATA || os.tmpdir(), 'myload')
 ).trim();
 
 void runNativeHostBridge({

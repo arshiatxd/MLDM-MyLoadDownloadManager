@@ -5,7 +5,9 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_EXTENSION_ID,
+  MYLOAD_PROTOCOL,
   NATIVE_HOST_NAME,
+  buildWindowsProtocolRegistryArgs,
   encodeNativeMessage,
   ensureNativeMessagingHostRegistered,
   readActiveBridgePort,
@@ -138,6 +140,15 @@ describe('Native Messaging Host & Auto-Launch Bridge', () => {
       port: 49174,
       launched: true,
     });
+  });
+
+  it('builds Windows protocol handler registry arguments for custom launch URI', () => {
+    const exePath = 'C:\\Program Files\\MyLoad Download Manager\\MyLoad Download Manager.exe';
+    const args = buildWindowsProtocolRegistryArgs(exePath);
+    expect(args).toHaveLength(3);
+    expect(args[0]).toContain(`HKCU\\Software\\Classes\\${MYLOAD_PROTOCOL}`);
+    expect(args[1]).toContain('URL Protocol');
+    expect(args[2]).toContain(`"${exePath}" "%1"`);
   });
 });
 

@@ -663,9 +663,13 @@ export function AddDownloadModal({
             )}
 
             {probing && (
-              <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent-text)]" />
-                <span>Checking file metadata...</span>
+              <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[var(--accent-text)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                <span>
+                  {detectedKind === 'torrent'
+                    ? 'Fetching torrent files & folders from peers...'
+                    : 'Checking file metadata...'}
+                </span>
               </div>
             )}
 
@@ -677,7 +681,7 @@ export function AddDownloadModal({
             )}
 
             {probe?.warning && !probeError && (
-              <div className="mt-1.5 text-[11px] text-[var(--text-secondary)]">
+              <div className="mt-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/60 px-2.5 py-1.5 text-[11px] text-[var(--text-secondary)]">
                 {probe.warning}
               </div>
             )}
@@ -712,97 +716,99 @@ export function AddDownloadModal({
             />
           )}
 
-          <div>
-            <div className="mb-1.5 flex items-center justify-between gap-2">
-              <label
-                htmlFor="save-to-input"
-                className="font-medium text-[var(--text-secondary)]"
-              >
-                {t(settings.language, 'saveTo')}
-              </label>
-              {hasCustomCategoryDir && !saveDirTouched && (
-                <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent-text)]">
-                  Auto-routed: {FILE_CATEGORY_META[detectedCategory].label}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <input
-                  id="save-to-input"
-                  type="text"
-                  list="recent-download-dirs"
-                  value={saveDir}
-                  onChange={(e) => {
-                    setSaveDir(e.target.value);
-                    setSaveDirTouched(true);
-                  }}
-                  className="ml-input h-9 border-[var(--accent)]/60 text-xs"
-                />
-                <datalist id="recent-download-dirs">
-                  {settings.recentDirs.map((dir) => (
-                    <option key={dir} value={dir} />
-                  ))}
-                </datalist>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleBrowseFolder()}
-                title="Browse folder"
-                aria-label="Browse download folder"
-                className="inline-flex h-9 w-10 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </button>
-            </div>
-
-            {isBatchMode && settings.folderRoutingMode === 'per-category' && !saveDirTouched && (
-              <div className="mt-1.5 text-[11.5px] text-[var(--accent-text)]">
-                Per-file-type routing active: each file saves to its category folder unless overridden above.
-              </div>
-            )}
-
-            <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--text-primary)]">
-              <input
-                type="checkbox"
-                checked={alwaysUseDir}
-                onChange={(e) => setAlwaysUseDir(e.target.checked)}
-                className="h-3.5 w-3.5 accent-[var(--accent)]"
-              />
-              <span>
-                {settings.folderRoutingMode === 'per-category' && !isBatchMode
-                  ? `Always use this folder for ${FILE_CATEGORY_META[detectedCategory].label}`
-                  : t(settings.language, 'alwaysFolder')}
-              </span>
-            </label>
-
-            <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} />
-          </div>
-
-          {!isBatchMode && !(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/45 p-3 space-y-3">
             <div>
-              <label
-                htmlFor="download-filename-input"
-                className="mb-1.5 block font-medium text-[var(--text-secondary)]"
-              >
-                {t(settings.language, 'fileName')}
-              </label>
-              <input
-                id="download-filename-input"
-                type="text"
-                value={fileName}
-                onChange={(e) => setFileName(e.target.value)}
-                placeholder="Auto-detected from URL or torrent"
-                className="ml-input h-9 text-xs"
-              />
-              {fileNameWarning && (
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--warning)]">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>{fileNameWarning}</span>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label
+                  htmlFor="save-to-input"
+                  className="font-medium text-[var(--text-secondary)]"
+                >
+                  {t(settings.language, 'saveTo')}
+                </label>
+                {hasCustomCategoryDir && !saveDirTouched && (
+                  <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent-text)]">
+                    Auto-routed: {FILE_CATEGORY_META[detectedCategory].label}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="save-to-input"
+                    type="text"
+                    list="recent-download-dirs"
+                    value={saveDir}
+                    onChange={(e) => {
+                      setSaveDir(e.target.value);
+                      setSaveDirTouched(true);
+                    }}
+                    className="ml-input h-9 border-[var(--accent)]/60 text-xs"
+                  />
+                  <datalist id="recent-download-dirs">
+                    {settings.recentDirs.map((dir) => (
+                      <option key={dir} value={dir} />
+                    ))}
+                  </datalist>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleBrowseFolder()}
+                  title="Browse folder"
+                  aria-label="Browse download folder"
+                  className="inline-flex h-9 w-10 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </button>
+              </div>
+
+              {isBatchMode && settings.folderRoutingMode === 'per-category' && !saveDirTouched && (
+                <div className="mt-1.5 text-[11.5px] text-[var(--accent-text)]">
+                  Per-file-type routing active: each file saves to its category folder unless overridden above.
                 </div>
               )}
+
+              <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--text-primary)]">
+                <input
+                  type="checkbox"
+                  checked={alwaysUseDir}
+                  onChange={(e) => setAlwaysUseDir(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--accent)]"
+                />
+                <span>
+                  {settings.folderRoutingMode === 'per-category' && !isBatchMode
+                    ? `Always use this folder for ${FILE_CATEGORY_META[detectedCategory].label}`
+                    : t(settings.language, 'alwaysFolder')}
+                </span>
+              </label>
+
+              <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} hideOk />
             </div>
-          )}
+
+            {!isBatchMode && !(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
+              <div>
+                <label
+                  htmlFor="download-filename-input"
+                  className="mb-1.5 block font-medium text-[var(--text-secondary)]"
+                >
+                  {t(settings.language, 'fileName')}
+                </label>
+                <input
+                  id="download-filename-input"
+                  type="text"
+                  value={fileName}
+                  onChange={(e) => setFileName(e.target.value)}
+                  placeholder="Auto-detected from URL or torrent"
+                  className="ml-input h-9 text-xs"
+                />
+                {fileNameWarning && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--warning)]">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{fileNameWarning}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {fileExistsOnDisk && settings.duplicatePolicy === 'ask' && (
             <div className="rounded-lg border border-[var(--warning)]/50 bg-[var(--warning-soft)] p-2.5 text-xs">

@@ -36,7 +36,7 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 
 ### Windows Installer Wizard (Recommended)
 
-Download the latest `MyLoad-Download-Manager-Installer-1.0.13-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.13-x64.exe`) is also produced by `npm run dist`.
+Download the latest `MyLoad-Download-Manager-Installer-1.0.14-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.14-x64.exe`) is also produced by `npm run dist`.
 
 ### Browser Extension & Localhost Bridge Guide
 

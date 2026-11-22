@@ -27,6 +27,7 @@ export function registerIpcHandlers(params: {
   getWindow: () => BrowserWindow | null;
   getExtensionDir: () => string;
   getPopupSession: (sessionId: string) => PopupSessionData | null;
+  onOpenDownloadPopup: (downloadId: string) => void;
   onOpenMainWindow: () => void;
   onRequestQuit: () => void;
 }): void {
@@ -36,6 +37,7 @@ export function registerIpcHandlers(params: {
     getWindow,
     getExtensionDir,
     getPopupSession,
+    onOpenDownloadPopup,
     onOpenMainWindow,
     onRequestQuit,
   } = params;
@@ -88,6 +90,11 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:get-popup-session', (_e, sessionId: string) =>
     getPopupSession(sessionId)
   );
+  ipcMain.handle('myload:open-download-popup', (_e, id: string) => {
+    if (manager.getDownloads().some((d) => d.id === id)) {
+      onOpenDownloadPopup(id);
+    }
+  });
   ipcMain.handle('myload:open-main-window', () => {
     onOpenMainWindow();
   });
@@ -225,7 +232,7 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:show-in-folder', (_e, filePath: string) => {
     if (!filePath) return;
     const resolvedTarget = path.resolve(filePath);
-    const isKnown = manager.getDownloads().some((d) => {
+    const matched = manager.getDownloads().find((d) => {
       if (!d.filePath) return false;
       const known = path.resolve(d.filePath);
       const cmpKnown = process.platform === 'win32' ? known.toLowerCase() : known;
@@ -233,11 +240,13 @@ export function registerIpcHandlers(params: {
         process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
       return cmpTarget === cmpKnown || cmpTarget === `${cmpKnown}.myload.part`;
     });
-    if (!isKnown) return;
+    if (!matched) return;
     if (fs.existsSync(resolvedTarget)) {
       shell.showItemInFolder(resolvedTarget);
     } else if (fs.existsSync(`${resolvedTarget}.myload.part`)) {
       shell.showItemInFolder(`${resolvedTarget}.myload.part`);
+    } else if (matched.saveDir && fs.existsSync(matched.saveDir)) {
+      void shell.openPath(matched.saveDir);
     }
   });
 

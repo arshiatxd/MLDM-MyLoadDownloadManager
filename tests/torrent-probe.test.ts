@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import createTorrent from 'create-torrent';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { probeTorrentSource } from '../src/main/torrent-engine';
+import { DownloadManager } from '../src/main/download-manager';
+import { LogManager } from '../src/main/logger';
+import {
+  TorrentDownloadEngine,
+  probeTorrentSource,
+  resolveTorrentTargetPath,
+} from '../src/main/torrent-engine';
 
 describe('torrent probing', () => {
   let tmpDir: string;
@@ -58,6 +64,95 @@ describe('torrent probing', () => {
     expect(probe.infoHash).toBe('0123456789abcdef0123456789abcdef01234567');
     expect(probe.totalBytes).toBeNull();
     expect(probe.trackers?.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('resolves single-file, multi-file folder, and safe fallback torrent paths', () => {
+    const saveDir = path.join(tmpDir, 'Downloads');
+    expect(
+      resolveTorrentTargetPath(saveDir, 'ubuntu.iso', ['ubuntu.iso'], 'fallback')
+    ).toBe(path.resolve(saveDir, 'ubuntu.iso'));
+
+    expect(
+      resolveTorrentTargetPath(
+        saveDir,
+        'ReleasePack',
+        ['ReleasePack/sub/track1.flac', 'ReleasePack/cover.jpg'],
+        'fallback'
+      )
+    ).toBe(path.resolve(saveDir, 'ReleasePack'));
+
+    expect(
+      resolveTorrentTargetPath(saveDir, 'safe-folder', ['../outside.exe'], 'fallback')
+    ).toBe(path.join(saveDir, 'safe-folder'));
+  });
+
+  it('initializes WebTorrent client cleanly and removes bulk selected downloads and folders together', async () => {
+    const logger = new LogManager(null);
+    const engine = new TorrentDownloadEngine(logger);
+    const client = await (
+      engine as unknown as { ensureClient: () => Promise<{ add: unknown; destroy: (cb: () => void) => void }> }
+    ).ensureClient();
+    expect(typeof client.add).toBe('function');
+    await engine.destroyAll();
+
+    const saveDir = path.join(tmpDir, 'BulkSave');
+    await fs.promises.mkdir(saveDir, { recursive: true });
+    const file1 = path.join(saveDir, 'archive-a.zip');
+    const folderTarget = path.join(saveDir, 'MoviePack');
+    await fs.promises.writeFile(file1, 'zip-data');
+    await fs.promises.mkdir(path.join(folderTarget, 'extras'), { recursive: true });
+    await fs.promises.writeFile(path.join(folderTarget, 'movie.mkv'), 'video-data');
+    await fs.promises.writeFile(path.join(folderTarget, 'extras', 'sub.srt'), 'subs');
+
+    const torrentFile = path.join(tmpDir, 'pack.torrent');
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        folderTarget,
+        { name: 'MoviePack' },
+        (err: Error | null, buf: Buffer) => {
+          if (err) reject(err);
+          else resolve(buf);
+        }
+      );
+    });
+    await fs.promises.writeFile(torrentFile, torrentBuf);
+
+    const manager = new DownloadManager({
+      stateFilePath: path.join(tmpDir, 'state.json'),
+      logFilePath: null,
+      defaultDownloadDir: saveDir,
+      appVersion: '1.0.12',
+      enableBridge: false,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => undefined,
+        executeSystemAction: async () => undefined,
+      },
+    });
+    manager.start();
+
+    try {
+      const item1 = await manager.addDownload({
+        source: 'https://example.com/archive-a.zip',
+        saveDir,
+        fileName: 'archive-a.zip',
+        startPaused: true,
+      });
+      const item2 = await manager.addDownload({
+        source: torrentFile,
+        saveDir,
+        fileName: 'MoviePack',
+        startPaused: true,
+      });
+
+      expect(manager.getSnapshot().downloads).toHaveLength(2);
+      await manager.removeDownloads([item1.id, item2.id], true);
+      expect(manager.getSnapshot().downloads).toHaveLength(0);
+      expect(fs.existsSync(file1)).toBe(false);
+      expect(fs.existsSync(folderTarget)).toBe(false);
+    } finally {
+      await manager.shutdown();
+    }
   });
 });
 

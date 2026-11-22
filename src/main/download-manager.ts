@@ -618,20 +618,30 @@ export class DownloadManager {
       if (!item) continue;
       removed.push(item);
 
-      if (item.kind === 'http') {
-        this.httpEngine.cancel(id);
-        this.releaseEqualBucket(id);
-      } else if (item.kind === 'media') {
-        this.socialDownloader.cancel(id);
-        this.socialDownloader.clearTarget(id);
-        this.pendingMediaJobs.delete(id);
-        this.activeMediaLimits.delete(id);
-      } else {
-        await this.torrentEngine.remove(id, deleteFiles);
+      try {
+        if (item.kind === 'http') {
+          this.httpEngine.cancel(id);
+          this.releaseEqualBucket(id);
+        } else if (item.kind === 'media') {
+          this.socialDownloader.cancel(id);
+          this.socialDownloader.clearTarget(id);
+          this.pendingMediaJobs.delete(id);
+          this.activeMediaLimits.delete(id);
+        } else {
+          await this.torrentEngine.remove(id, deleteFiles);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn('Queue', `Cleanup warning while removing ${item.name}: ${msg}`, id);
       }
 
       if (deleteFiles) {
-        await deleteDownloadFiles(item);
+        try {
+          await deleteDownloadFiles(item);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.warn('Queue', `Unable to delete files for ${item.name}: ${msg}`, id);
+        }
       }
     }
 

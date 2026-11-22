@@ -184,6 +184,23 @@ export function App() {
     return downloads.find((d) => d.id === focusedId) ?? null;
   }, [downloads, focusedId]);
 
+  useEffect(() => {
+    const present = new Set(downloads.map((d) => d.id));
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (present.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [downloads]);
+
+  const allVisibleSelected =
+    visibleDownloads.length > 0 && visibleDownloads.every((d) => selectedIds.has(d.id));
+
   const selectedItems = useMemo(() => {
     if (selectedIds.size > 0) {
       return downloads.filter((d) => selectedIds.has(d.id));
@@ -300,11 +317,23 @@ export function App() {
   }, [announce]);
 
   useEffect(() => {
-    const isInputFocused = () => {
-      const el = document.activeElement;
+    const isTextInputFocused = () => {
+      const el = document.activeElement as HTMLElement | null;
       if (!el) return false;
+      if (el.isContentEditable) return true;
       const tag = el.tagName.toLowerCase();
-      return tag === 'input' || tag === 'textarea' || tag === 'select';
+      if (tag === 'textarea' || tag === 'select') return true;
+      if (tag === 'input') {
+        const inputType = ((el as HTMLInputElement).type || '').toLowerCase();
+        return (
+          inputType !== 'checkbox' &&
+          inputType !== 'radio' &&
+          inputType !== 'button' &&
+          inputType !== 'submit' &&
+          inputType !== 'reset'
+        );
+      }
+      return false;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -335,17 +364,17 @@ export function App() {
         return;
       }
 
-      if (e.ctrlKey && e.key.toLowerCase() === 'v' && !isInputFocused()) {
+      if (e.ctrlKey && e.key.toLowerCase() === 'v' && !isTextInputFocused()) {
         e.preventDefault();
         void handlePasteFromClipboard();
         return;
       }
-      if (e.ctrlKey && e.key.toLowerCase() === 'a' && !isInputFocused()) {
+      if (e.ctrlKey && e.key.toLowerCase() === 'a' && !isTextInputFocused()) {
         e.preventDefault();
         setSelectedIds(new Set(visibleDownloads.map((d) => d.id)));
         return;
       }
-      if (e.key === 'Delete' && !isInputFocused() && selectedItems.length > 0) {
+      if (e.key === 'Delete' && !isTextInputFocused() && selectedItems.length > 0) {
         e.preventDefault();
         setRemoveModal({
           ids: selectedItems.map((i) => i.id),
@@ -353,7 +382,7 @@ export function App() {
         });
         return;
       }
-      if (e.key === ' ' && !isInputFocused() && document.activeElement?.tagName.toLowerCase() !== 'button') {
+      if (e.key === ' ' && !isTextInputFocused() && document.activeElement?.tagName.toLowerCase() !== 'button') {
         if (focusedItem) {
           e.preventDefault();
           if (
@@ -509,6 +538,7 @@ export function App() {
         onSearchChange={setSearchQuery}
         searchInputRef={searchInputRef}
         selectedCount={selectedItems.length}
+        allSelected={allVisibleSelected}
         canResumeSelected={canResumeSelected}
         canPauseSelected={canPauseSelected}
         hasActiveOrQueued={hasActiveOrQueued}
@@ -664,6 +694,7 @@ export function App() {
             setFocusedId(id);
             setInspectorOpen(true);
           }}
+          onShowPopup={(id) => void window.myload.openDownloadPopup(id)}
           onPause={(id) => void window.myload.pauseDownload(id)}
           onResume={(id) => void window.myload.resumeDownload(id)}
           onRetry={(id) => void window.myload.retryDownload(id)}
@@ -777,7 +808,16 @@ export function App() {
         onClose={() => setRemoveModal(null)}
         onConfirm={(deleteFiles) => {
           if (removeModal) {
+            const removedSet = new Set(removeModal.ids);
             void window.myload.removeDownloads(removeModal.ids, deleteFiles);
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of removedSet) next.delete(id);
+              return next;
+            });
+            if (focusedId && removedSet.has(focusedId)) {
+              setFocusedId(null);
+            }
             setRemoveModal(null);
           }
         }}

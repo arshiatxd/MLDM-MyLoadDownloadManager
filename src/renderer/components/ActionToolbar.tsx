@@ -35,6 +35,7 @@ interface ActionToolbarProps {
   onSearchChange: (q: string) => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   selectedCount: number;
+  allSelected?: boolean;
   canResumeSelected: boolean;
   canPauseSelected: boolean;
   hasActiveOrQueued: boolean;
@@ -158,11 +159,25 @@ export function ActionToolbar(props: ActionToolbarProps) {
             type="button"
             onClick={props.onRemoveSelected}
             disabled={props.selectedCount === 0}
-            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--danger-soft)] hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-            title={`${t(props.lang, 'remove')} (Delete)`}
+            className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer ${
+              props.selectedCount > 1
+                ? 'bg-[var(--danger-soft)]/60 text-[var(--danger)] hover:bg-[var(--danger-soft)]'
+                : 'text-[var(--text-primary)] hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]'
+            }`}
+            title={`${props.allSelected && props.selectedCount > 1 ? 'Delete all' : t(props.lang, 'remove')} (Delete)`}
           >
             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="hidden xl:inline">{t(props.lang, 'remove')}</span>
+            {props.selectedCount > 1 ? (
+              <span>
+                {props.allSelected
+                  ? `Delete all (${props.selectedCount})`
+                  : `Delete (${props.selectedCount})`}
+              </span>
+            ) : (
+              <span className={props.selectedCount > 0 ? '' : 'hidden xl:inline'}>
+                {t(props.lang, 'remove')}
+              </span>
+            )}
           </button>
         </div>
 

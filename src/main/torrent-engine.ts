@@ -104,6 +104,29 @@ export function normalizeTorrentSource(raw: string): string {
   return trimmed;
 }
 
+export function resolveTorrentTargetPath(
+  saveDir: string,
+  torrentName: string | undefined,
+  filePaths: string[],
+  fallbackName: string
+): string {
+  if (filePaths.length === 1) {
+    const candidate = path.resolve(saveDir, filePaths[0]);
+    if (isPathInsideDir(saveDir, candidate)) {
+      return candidate;
+    }
+  } else if (filePaths.length > 1) {
+    const rootSegment = filePaths[0].split(/[\\/]/).filter(Boolean)[0] || torrentName;
+    if (rootSegment) {
+      const candidate = path.resolve(saveDir, rootSegment);
+      if (isPathInsideDir(saveDir, candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return path.join(saveDir, sanitizeFileName(torrentName || fallbackName));
+}
+
 export class TorrentDownloadEngine {
   private client: WebTorrent | null = null;
   private readonly logger: LogManager;
@@ -165,6 +188,38 @@ export class TorrentDownloadEngine {
         return;
       }
 
+      let expectedInfoHash = (item.torrent?.infoHash || '').trim().toLowerCase();
+      if (!expectedInfoHash) {
+        try {
+          const parsed = await parseTorrent(torrentInput);
+          expectedInfoHash = (parsed.infoHash || '').trim().toLowerCase();
+        } catch {
+          expectedInfoHash = '';
+        }
+      }
+
+      if (expectedInfoHash) {
+        const existing = client.torrents.find(
+          (t) => (t.infoHash || '').trim().toLowerCase() === expectedInfoHash
+        );
+        if (existing) {
+          const ownedByActive = [...this.active.values()].some((e) => e.torrent === existing);
+          if (ownedByActive) {
+            opts.onError('This torrent is already active in the queue');
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            try {
+              existing.destroy({ destroyStore: false }, () => resolve());
+            } catch {
+              resolve();
+            }
+          });
+        }
+      }
+
+      const hasPartialSelection = selectedIndices !== null && selectedIndices.size < savedFiles.length;
+
       this.logger.info('Torrent', `Starting ${item.name}`, item.id);
       opts.onProgress({
         status: item.status === 'seeding' ? 'seeding' : 'downloading',
@@ -173,7 +228,7 @@ export class TorrentDownloadEngine {
 
       const torrent = client.add(torrentInput, {
         path: item.saveDir,
-        deselect: true,
+        deselect: hasPartialSelection,
       });
 
       const entry: ActiveTorrentEntry = {
@@ -377,7 +432,12 @@ export class TorrentDownloadEngine {
       });
 
     const torrentName = sanitizeFileName(t.name || item.name);
-    const targetPath = path.join(item.saveDir, torrentName);
+    const targetPath = resolveTorrentTargetPath(
+      item.saveDir,
+      t.name,
+      files.map((f) => f.path),
+      item.name
+    );
 
     const torrentMeta: TorrentMeta = {
       infoHash: t.infoHash || item.torrent?.infoHash || '',
@@ -442,7 +502,12 @@ export class TorrentDownloadEngine {
         ? selectedFiles.reduce((sum, f) => sum + f.length, 0)
         : t.length || item.totalBytes || 0;
     const finalName = sanitizeFileName(t.name || item.name);
-    const finalPath = path.join(item.saveDir, finalName);
+    const finalPath = resolveTorrentTargetPath(
+      item.saveDir,
+      t.name,
+      files.map((f) => f.path),
+      item.name
+    );
 
     this.logger.info('Torrent', `Download complete for ${finalName}`, item.id);
 

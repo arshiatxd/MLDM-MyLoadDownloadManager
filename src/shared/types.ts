@@ -424,6 +424,7 @@ export interface MyLoadApi {
     pageCandidates?: Array<{ url: string; fileName?: string }>
   ) => Promise<MultiPartScanResult>;
   getPopupSession: (sessionId: string) => Promise<PopupSessionData | null>;
+  openDownloadPopup: (id: string) => Promise<void>;
   openMainWindow: () => Promise<void>;
   resizeCurrentWindow: (width: number, height: number) => Promise<void>;
   pauseDownload: (id: string) => Promise<void>;

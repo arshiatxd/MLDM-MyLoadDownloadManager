@@ -14,9 +14,6 @@ files:
   - build/tray-icon.png
   - build/icon.ico
   - "!dist/**/*.map"
-  - "!node_modules/node-datachannel/**"
-  - "!node_modules/webrtc-polyfill/**"
-  - "!node_modules/web-streams-polyfill/**"
   - "!node_modules/webtorrent/dist/**"
   - "!node_modules/xml2js/lib/xml2js.bc.js"
   - "!node_modules/**/*.map"

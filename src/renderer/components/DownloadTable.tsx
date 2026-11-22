@@ -14,6 +14,7 @@ import {
   Magnet,
   MoreVertical,
   Pause,
+  PictureInPicture2,
   Play,
   RotateCw,
   Trash2,
@@ -40,6 +41,7 @@ interface DownloadTableProps {
   onToggleSelectAll: () => void;
   onFocusItem: (id: string) => void;
   onInspectItem: (id: string) => void;
+  onShowPopup: (id: string) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRetry: (id: string) => void;
@@ -355,6 +357,7 @@ export function DownloadTable({
   onToggleSelectAll,
   onFocusItem,
   onInspectItem,
+  onShowPopup,
   onPause,
   onResume,
   onRetry,
@@ -402,8 +405,8 @@ export function DownloadTable({
   }, [contextMenu]);
 
   const openContextMenuAt = (item: DownloadItem, clientX: number, clientY: number) => {
-    const menuWidth = 216;
-    const menuHeight = 330;
+    const menuWidth = 224;
+    const menuHeight = 375;
     const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8));
     const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8));
     setContextMenu({ item, x, y });
@@ -413,6 +416,14 @@ export function DownloadTable({
   const someSelected = items.some((it) => selectedIds.has(it.id)) && !allSelected;
 
   const menuItem = contextMenu?.item ?? null;
+  const visibleSelectedIds = items.filter((it) => selectedIds.has(it.id)).map((it) => it.id);
+  const menuRemoveIds =
+    menuItem && visibleSelectedIds.length > 1 && selectedIds.has(menuItem.id)
+      ? visibleSelectedIds
+      : menuItem
+        ? [menuItem.id]
+        : [];
+  const isBulkRemove = menuRemoveIds.length > 1;
   const menuIsRunning =
     menuItem !== null &&
     (menuItem.status === 'downloading' ||
@@ -571,7 +582,7 @@ export function DownloadTable({
           aria-label={`Actions for ${menuItem.name}`}
           onMouseDown={(e) => e.stopPropagation()}
           style={{ left: contextMenu.x, top: contextMenu.y }}
-          className="animate-menu-open fixed z-50 w-52 rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)] p-1.5 text-left shadow-2xl"
+          className="animate-menu-open fixed z-50 w-56 rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)] p-1.5 text-left shadow-2xl"
         >
           <button
             type="button"
@@ -586,6 +597,22 @@ export function DownloadTable({
             <Info className="h-4 w-4 text-[var(--text-secondary)]" />
             <span>Inspect details</span>
           </button>
+
+          {menuItem.status !== 'completed' && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const id = menuItem.id;
+                setContextMenu(null);
+                onShowPopup(id);
+              }}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+            >
+              <PictureInPicture2 className="h-4 w-4 text-[var(--accent-text)]" />
+              <span>Show popup</span>
+            </button>
+          )}
 
           {menuItem.status === 'error' ? (
             <button
@@ -701,28 +728,40 @@ export function DownloadTable({
             type="button"
             role="menuitem"
             onClick={() => {
-              const id = menuItem.id;
+              const ids = [...menuRemoveIds];
               setContextMenu(null);
-              onRequestRemove([id], false);
+              onRequestRemove(ids, false);
             }}
             className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
           >
             <Trash2 className="h-4 w-4 text-[var(--text-secondary)]" />
-            <span>Remove from list</span>
+            <span>
+              {isBulkRemove
+                ? allSelected
+                  ? `Remove all (${menuRemoveIds.length})`
+                  : `Remove selected (${menuRemoveIds.length})`
+                : 'Remove from list'}
+            </span>
           </button>
 
           <button
             type="button"
             role="menuitem"
             onClick={() => {
-              const id = menuItem.id;
+              const ids = [...menuRemoveIds];
               setContextMenu(null);
-              onRequestRemove([id], true);
+              onRequestRemove(ids, true);
             }}
             className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--danger)] hover:bg-[var(--danger-soft)]"
           >
             <Trash2 className="h-4 w-4" />
-            <span>Remove &amp; delete files</span>
+            <span>
+              {isBulkRemove
+                ? allSelected
+                  ? `Delete all & files (${menuRemoveIds.length})`
+                  : `Remove & delete files (${menuRemoveIds.length})`
+                : 'Remove & delete files'}
+            </span>
           </button>
         </div>
       )}

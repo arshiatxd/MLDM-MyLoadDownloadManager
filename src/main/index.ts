@@ -149,7 +149,7 @@ function openCompactPopup(data: Omit<PopupSessionData, 'sessionId'>): void {
     minHeight: 260,
     frame: false,
     show: false,
-    alwaysOnTop: true,
+    alwaysOnTop: false,
     resizable: true,
     minimizable: true,
     maximizable: false,
@@ -187,6 +187,22 @@ function openCompactPopup(data: Omit<PopupSessionData, 'sessionId'>): void {
       query: { view: 'popup', session: sessionId },
     });
   }
+}
+
+function openDownloadProgressPopup(downloadId: string): void {
+  for (const entry of popupWindows.values()) {
+    if (entry.win.isDestroyed()) continue;
+    const isMatch =
+      entry.data.mode === 'progress' &&
+      (entry.data.downloadId === downloadId || entry.data.downloadIds?.includes(downloadId));
+    if (isMatch) {
+      if (entry.win.isMinimized()) entry.win.restore();
+      entry.win.show();
+      entry.win.focus();
+      return;
+    }
+  }
+  openCompactPopup({ mode: 'progress', downloadId });
 }
 
 function extractLaunchSource(argv: string[]): string | undefined {
@@ -253,6 +269,15 @@ function createMainWindow(): BrowserWindow {
         if (typeof wt.default !== 'function') {
           throw new Error('webtorrent default export missing');
         }
+        const wtClient = new wt.default({
+          dht: false,
+          lsd: false,
+          tracker: false,
+        });
+        if (typeof wtClient.add !== 'function') {
+          throw new Error('webtorrent client add method missing');
+        }
+        await new Promise<void>((resolve) => wtClient.destroy(() => resolve()));
         const result = await win.webContents.executeJavaScript(`
           (async () => {
             if (!window.myload || typeof window.myload.getInitialState !== 'function') {
@@ -434,6 +459,7 @@ app.whenReady().then(() => {
     getWindow: () => mainWindow,
     getExtensionDir: resolveExtensionDir,
     getPopupSession: (sessionId) => popupWindows.get(sessionId)?.data ?? null,
+    onOpenDownloadPopup: (downloadId) => openDownloadProgressPopup(downloadId),
     onOpenMainWindow: () => focusMainWindow(),
     onRequestQuit: () => {
       void performQuit();

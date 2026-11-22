@@ -25,11 +25,19 @@ export function RemoveConfirmModal({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'Enter') {
+        const tag = document.activeElement?.tagName.toLowerCase();
+        if (tag !== 'button') {
+          e.preventDefault();
+          onConfirm(deleteFiles);
+        }
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, deleteFiles, onClose, onConfirm]);
 
   if (!open) return null;
 
@@ -45,7 +53,7 @@ export function RemoveConfirmModal({
           <div className="flex items-center gap-2 text-[var(--danger)]">
             <Trash2 className="h-4 w-4" aria-hidden="true" />
             <h2 id="remove-modal-title" className="text-base font-semibold text-[var(--text-primary)]">
-              Remove {count} download{count === 1 ? '' : 's'}?
+              {count > 1 ? `Remove all ${count} downloads?` : 'Remove 1 download?'}
             </h2>
           </div>
           <button
@@ -85,7 +93,7 @@ export function RemoveConfirmModal({
             onClick={() => onConfirm(deleteFiles)}
             className="h-9 rounded-md bg-[var(--accent)] px-4 text-[13px] font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)]"
           >
-            Remove
+            {count > 1 ? `Remove all (${count})` : 'Remove'}
           </button>
         </div>
       </div>

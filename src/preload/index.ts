@@ -47,6 +47,8 @@ const api: MyLoadApi = {
   ) => ipcRenderer.invoke('myload:scan-multiparts', url, requestHeaders, pageCandidates),
   getPopupSession: (sessionId: string) =>
     ipcRenderer.invoke('myload:get-popup-session', sessionId),
+  openDownloadPopup: (id: string) =>
+    ipcRenderer.invoke('myload:open-download-popup', id),
   openMainWindow: () => ipcRenderer.invoke('myload:open-main-window'),
   resizeCurrentWindow: (width: number, height: number) =>
     ipcRenderer.invoke('myload:win-resize', width, height),

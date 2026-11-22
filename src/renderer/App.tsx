@@ -35,6 +35,7 @@ import { ShutdownCountdownModal } from './components/ShutdownCountdownModal';
 import { StatusBar } from './components/StatusBar';
 import { TitleBar } from './components/TitleBar';
 import { UpdateBanner } from './components/UpdateBanner';
+import { UpdatePromptModal } from './components/UpdatePromptModal';
 import { useDownloadsState } from './hooks/useDownloads';
 import { useCompletionSound } from './hooks/useSound';
 import { applyDocumentAppearance } from './utils/theme';
@@ -73,6 +74,8 @@ export function App() {
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const [dismissedAlertSig, setDismissedAlertSig] = useState<string | null>(null);
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
+  const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false);
+  const [forceUpdatePrompt, setForceUpdatePrompt] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const announce = useCallback((msg: string, showToast = true) => {
@@ -273,14 +276,25 @@ export function App() {
     }
   }, [announce]);
 
+  const showUpdatePrompt =
+    (updateStatus.state === 'available' ||
+      updateStatus.state === 'downloading' ||
+      updateStatus.state === 'downloaded') &&
+    !updatePromptDismissed &&
+    (!settings.hideUpdatePrompt || forceUpdatePrompt);
+
   const handleCheckForUpdates = useCallback(async () => {
     setDismissedUpdateVersion(null);
+    setUpdatePromptDismissed(false);
     const st = await window.myload.checkForUpdates();
     if (st.state === 'available' && st.latestVersion) {
+      setForceUpdatePrompt(true);
       announce(`MyLoad v${st.latestVersion} is available on GitHub`);
     } else if (st.state === 'up-to-date') {
+      setForceUpdatePrompt(false);
       announce(`MyLoad v${st.currentVersion} is up to date`);
     } else if (st.state === 'error') {
+      setForceUpdatePrompt(false);
       announce(st.error || 'Unable to check for updates');
     }
   }, [announce]);
@@ -317,7 +331,7 @@ export function App() {
         return;
       }
 
-      if (addModalOpen || settingsOpen || logsOpen || aboutOpen || privacyOpen || removeModal) {
+      if (addModalOpen || settingsOpen || logsOpen || aboutOpen || privacyOpen || removeModal || showUpdatePrompt) {
         return;
       }
 
@@ -365,6 +379,7 @@ export function App() {
     aboutOpen,
     privacyOpen,
     removeModal,
+    showUpdatePrompt,
     visibleDownloads,
     selectedItems,
     focusedItem,
@@ -551,10 +566,11 @@ export function App() {
       />
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {(updateStatus.state === 'downloading' ||
-          updateStatus.state === 'downloaded' ||
-          (updateStatus.state === 'available' &&
-            updateStatus.latestVersion !== dismissedUpdateVersion)) && (
+        {!showUpdatePrompt &&
+          (updateStatus.state === 'downloading' ||
+            updateStatus.state === 'downloaded' ||
+            (updateStatus.state === 'available' &&
+              updateStatus.latestVersion !== dismissedUpdateVersion)) && (
           <UpdateBanner
             status={updateStatus}
             onUpdateNow={() => void window.myload.downloadAndInstallUpdate()}
@@ -794,6 +810,21 @@ export function App() {
       />
 
       <PrivacyPolicyModal open={privacyOpen} onClose={() => setPrivacyOpen(false)} />
+
+      <UpdatePromptModal
+        open={showUpdatePrompt}
+        status={updateStatus}
+        onDownloadAndInstall={() => void window.myload.downloadAndInstallUpdate()}
+        onOpenRelease={() => void window.myload.openUpdateReleasePage()}
+        onDismiss={(dontShowAgain) => {
+          setUpdatePromptDismissed(true);
+          setForceUpdatePrompt(false);
+          setDismissedUpdateVersion(updateStatus.latestVersion ?? null);
+          if (dontShowAgain) {
+            handleUpdateSettings({ hideUpdatePrompt: true });
+          }
+        }}
+      />
 
       {toast && (
         <div className="animate-menu-open pointer-events-none fixed bottom-12 right-4 z-50 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3.5 py-2 text-[13px] font-medium text-[var(--text-primary)] shadow-xl">

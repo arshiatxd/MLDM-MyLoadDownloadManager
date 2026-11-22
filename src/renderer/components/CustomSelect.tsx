@@ -20,6 +20,7 @@ interface CustomSelectProps<T extends string = string> {
   leadingIcon?: React.ReactNode;
   align?: 'left' | 'right';
   size?: 'sm' | 'md';
+  hoverOnlyBorder?: boolean;
 }
 
 export function CustomSelect<T extends string = string>({
@@ -34,6 +35,7 @@ export function CustomSelect<T extends string = string>({
   leadingIcon,
   align = 'left',
   size = 'md',
+  hoverOnlyBorder = false,
 }: CustomSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -158,6 +160,9 @@ export function CustomSelect<T extends string = string>({
   };
 
   const paddingClass = size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm';
+  const borderClass = hoverOnlyBorder
+    ? 'border-transparent hover:border-[var(--border-strong)]'
+    : 'border-[var(--border-subtle)] hover:border-[var(--border-strong)]';
 
   return (
     <div ref={rootRef} className={`relative ${className}`}>
@@ -171,7 +176,7 @@ export function CustomSelect<T extends string = string>({
         aria-controls={open ? listId : undefined}
         onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleButtonKeyDown}
-        className={`w-full inline-flex items-center justify-between gap-2 rounded-xl border bg-[var(--bg-canvas)] transition-all duration-150 cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed ${paddingClass} ${buttonClassName}`}
+        className={`w-full inline-flex items-center justify-between gap-2 rounded-xl border bg-[var(--bg-canvas)] transition-all duration-150 cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed ${borderClass} ${paddingClass} ${buttonClassName}`}
         style={{
           borderColor: open ? 'var(--accent)' : undefined,
           boxShadow: open ? '0 0 0 2px var(--accent-soft)' : 'none',

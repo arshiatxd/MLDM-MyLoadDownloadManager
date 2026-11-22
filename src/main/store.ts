@@ -155,6 +155,7 @@ export class StateStore {
           rawSettings.autoCheckUpdates !== undefined
             ? Boolean(rawSettings.autoCheckUpdates)
             : defaults.autoCheckUpdates,
+        hideUpdatePrompt: Boolean(rawSettings.hideUpdatePrompt),
         language: isValidLanguage(rawSettings.language) ? rawSettings.language : 'en',
       };
 

@@ -669,6 +669,9 @@ describe('DownloadManager social media confirmation workflow', () => {
     const rateIdx = capped.indexOf('--limit-rate');
     expect(rateIdx).toBeGreaterThan(-1);
     expect(capped[rateIdx + 1]).toBe('1048576');
+    const cappedFragIdx = capped.indexOf('--concurrent-fragments');
+    expect(cappedFragIdx).toBeGreaterThan(-1);
+    expect(capped[cappedFragIdx + 1]).toBe('1');
 
     const uncapped = buildYtDlpArgs({
       req,
@@ -679,6 +682,12 @@ describe('DownloadManager social media confirmation workflow', () => {
     });
     expect(uncapped).toContain('--continue');
     expect(uncapped).not.toContain('--limit-rate');
+    const uncappedFragIdx = uncapped.indexOf('--concurrent-fragments');
+    expect(uncappedFragIdx).toBeGreaterThan(-1);
+    expect(uncapped[uncappedFragIdx + 1]).toBe('8');
+    const bufferIdx = uncapped.indexOf('--buffer-size');
+    expect(bufferIdx).toBeGreaterThan(-1);
+    expect(uncapped[bufferIdx + 1]).toBe('1M');
   });
 
   it('terminates spawned parent and grandchild processes cleanly on abort with zero late stdout callbacks', async () => {

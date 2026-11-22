@@ -124,7 +124,7 @@ export function createDefaultSettings(defaultDownloadDir: string): AppSettings {
     uploadSpeedLimitUnit: 'KB/s',
 
     maxConcurrentDownloads: 3,
-    httpConnections: 8,
+    httpConnections: 16,
     maxRetries: 3,
     duplicatePolicy: 'auto-rename',
 
@@ -157,6 +157,7 @@ export function createDefaultSettings(defaultDownloadDir: string): AppSettings {
     multiPartDefaultAction: 'single',
     startOnStartup: true,
     autoCheckUpdates: true,
+    hideUpdatePrompt: false,
     language: 'en',
   };
 }

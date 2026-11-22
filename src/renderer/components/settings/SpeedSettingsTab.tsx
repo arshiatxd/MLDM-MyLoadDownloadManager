@@ -226,11 +226,11 @@ export function SpeedSettingsTab({ settings, onUpdate }: SpeedSettingsTabProps) 
             <input
               type="number"
               min={1}
-              max={16}
+              max={32}
               value={settings.httpConnections}
               onChange={(e) =>
                 onUpdate({
-                  httpConnections: Math.min(16, Math.max(1, Number(e.target.value) || 1)),
+                  httpConnections: Math.min(32, Math.max(1, Number(e.target.value) || 1)),
                 })
               }
               className="ml-input h-9"

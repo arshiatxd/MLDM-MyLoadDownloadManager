@@ -103,6 +103,17 @@ export function PowerSettingsTab({ settings, onUpdate }: PowerSettingsTabProps) 
             />
             <span>Check GitHub for new MyLoad versions automatically</span>
           </label>
+
+          <label className="flex cursor-pointer items-center gap-2 pl-6 text-[var(--text-primary)]">
+            <input
+              type="checkbox"
+              disabled={!settings.autoCheckUpdates}
+              checked={!settings.hideUpdatePrompt}
+              onChange={(e) => onUpdate({ hideUpdatePrompt: !e.target.checked })}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            <span>Show update reminder popup on launch when a newer version is available</span>
+          </label>
         </div>
       </section>
     </div>

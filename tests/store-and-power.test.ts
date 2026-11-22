@@ -24,8 +24,11 @@ describe('StateStore and PowerManager', () => {
     const store = new StateStore(stateFile, 'C:/Downloads');
 
     const settings = createDefaultSettings('C:/Downloads');
+    expect(settings.httpConnections).toBe(16);
+    expect(settings.hideUpdatePrompt).toBe(false);
     settings.autoPowerAction = 'shutdown';
     settings.theme = 'light';
+    settings.hideUpdatePrompt = true;
     settings.filterTabOrder = ['torrents', 'all', 'images', 'docs', 'archives', 'videos', 'active', 'completed', 'other'];
 
     const item: DownloadItem = {
@@ -55,6 +58,7 @@ describe('StateStore and PowerManager', () => {
     const loaded = store2.load();
     expect(loaded.settings.autoPowerAction).toBe('off');
     expect(loaded.settings.theme).toBe('light');
+    expect(loaded.settings.hideUpdatePrompt).toBe(true);
     expect(loaded.settings.filterTabOrder[0]).toBe('torrents');
     expect(loaded.downloads[0].status).toBe('queued');
     expect(loaded.downloads[0].downloadSpeed).toBe(0);

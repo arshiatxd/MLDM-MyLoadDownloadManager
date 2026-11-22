@@ -237,7 +237,14 @@ export function buildYtDlpArgs(params: {
     Number.isFinite(limitRateBytesPerSec) &&
     limitRateBytesPerSec > 0
   ) {
-    args.push('--limit-rate', String(Math.max(1024, Math.floor(limitRateBytesPerSec))));
+    args.push(
+      '--limit-rate',
+      String(Math.max(1024, Math.floor(limitRateBytesPerSec))),
+      '--concurrent-fragments',
+      '1'
+    );
+  } else {
+    args.push('--concurrent-fragments', '8', '--buffer-size', '1M');
   }
 
   if (ffmpegPath) {

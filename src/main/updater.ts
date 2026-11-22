@@ -123,7 +123,7 @@ export class UpdateService {
     onStatusChanged?: (status: UpdateStatus) => void;
     onLaunchInstaller?: (filePath: string) => Promise<void> | void;
   }) {
-    this.currentVersion = opts.currentVersion || '1.0.1';
+    this.currentVersion = opts.currentVersion || '1.0.12';
     this.downloadDir = opts.downloadDir || path.join(os.tmpdir(), 'MyLoad-Updates');
     this.apiUrl = opts.apiUrl || DEFAULT_API_URL;
     this.fallbackReleaseUrl = opts.fallbackReleaseUrl || DEFAULT_RELEASE_URL;
@@ -145,6 +145,28 @@ export class UpdateService {
       return this.status.releaseUrl;
     }
     return this.fallbackReleaseUrl;
+  }
+
+  async cleanupDownloadedInstallers(): Promise<number> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(this.downloadDir, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || !/\.(exe|part)$/i.test(entry.name)) {
+        continue;
+      }
+      try {
+        await fs.promises.rm(path.join(this.downloadDir, entry.name), { force: true });
+        removed += 1;
+      } catch {
+      }
+    }
+    return removed;
   }
 
   private setStatus(next: UpdateStatus): UpdateStatus {

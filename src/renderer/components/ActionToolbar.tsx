@@ -172,7 +172,8 @@ export function ActionToolbar(props: ActionToolbarProps) {
           onChange={props.onSortChange}
           ariaLabel="Sort downloads"
           className="w-40"
-          buttonClassName="h-9 bg-[var(--bg-elevated)] hover:border-[var(--border-strong)]"
+          hoverOnlyBorder
+          buttonClassName="h-9 bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)]"
           leadingIcon={<ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />}
         />
       </div>

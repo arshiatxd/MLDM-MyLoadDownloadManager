@@ -21,6 +21,9 @@ import type { TokenBucket } from './throttle';
 
 const MAX_REDIRECTS = 10;
 const REQUEST_TIMEOUT_MS = 20000;
+const WRITE_BUFFER_BYTES = 128 * 1024;
+const WRITE_FLUSH_INTERVAL_MS = 120;
+const MAX_HTTP_CONNECTIONS = 32;
 const USER_AGENT = 'MyLoad/1.0 (Windows NT; Download Manager)';
 
 const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
@@ -63,6 +66,8 @@ export class HttpDownloadEngine {
   private readonly throttle: TokenBucket;
   private readonly logger: LogManager;
   private readonly activeTasks = new Map<string, ActiveTask>();
+  private readonly httpAgent = new http.Agent({ keepAlive: false, maxSockets: 128 });
+  private readonly httpsAgent = new https.Agent({ keepAlive: false, maxSockets: 128 });
 
   constructor(throttle: TokenBucket, logger: LogManager) {
     this.throttle = throttle;
@@ -491,75 +496,105 @@ export class HttpDownloadEngine {
       headers.Range = hasKnownEnd ? `bytes=${startByte}-${seg.end}` : `bytes=${startByte}-`;
     }
 
-    const { res, statusCode } = await this.openFollowStream(url, headers, task);
-    const cleanupOnAbort = () => {
-      res.destroy();
-    };
-    task.controller.signal.addEventListener('abort', cleanupOnAbort, { once: true });
+      const { res, statusCode } = await this.openFollowStream(url, headers, task);
+      res.socket?.setNoDelay(true);
+      const cleanupOnAbort = () => {
+        res.destroy();
+      };
+      task.controller.signal.addEventListener('abort', cleanupOnAbort, { once: true });
 
-    try {
-      if (statusCode >= 400) {
-        res.resume();
-        throw new HttpStatusError(statusCode, `HTTP ${statusCode}`);
-      }
-
-      if (statusCode === 200 && seg.downloaded > 0) {
-        if (seg.index === 0 && !hasKnownEnd) {
-          seg.downloaded = 0;
-          await handle.truncate(0);
-        } else if (seg.start + seg.downloaded > 0) {
+      try {
+        if (statusCode >= 400) {
           res.resume();
-          throw new Error('Server refused byte-range resume (returned HTTP 200)');
+          throw new HttpStatusError(statusCode, `HTTP ${statusCode}`);
         }
-      }
 
-      if (totalBytes === null) {
-        const len = parseContentLength(res.headers['content-length']);
-        if (len !== null) {
-          onTotalBytesDiscovered(len);
-        }
-      }
-
-      const expectedSegmentLen = seg.end >= seg.start ? seg.end - seg.start + 1 : null;
-
-      for await (const rawChunk of res) {
-        if (task.stoppedByUser || task.controller.signal.aborted) {
-          throw createAbortError();
-        }
-        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-        let toWrite = chunk;
-        if (expectedSegmentLen !== null) {
-          const remaining = expectedSegmentLen - seg.downloaded;
-          if (remaining <= 0) break;
-          if (toWrite.length > remaining) {
-            toWrite = toWrite.subarray(0, remaining);
+        if (statusCode === 200 && seg.downloaded > 0) {
+          if (seg.index === 0 && !hasKnownEnd) {
+            seg.downloaded = 0;
+            await handle.truncate(0);
+          } else if (seg.start + seg.downloaded > 0) {
+            res.resume();
+            throw new Error('Server refused byte-range resume (returned HTTP 200)');
           }
         }
 
-        await throttleBucket.consume(toWrite.length, task.controller.signal);
-
-        if (task.stoppedByUser || task.controller.signal.aborted) {
-          throw createAbortError();
+        if (totalBytes === null) {
+          const len = parseContentLength(res.headers['content-length']);
+          if (len !== null) {
+            onTotalBytesDiscovered(len);
+          }
         }
 
-        const position = seg.start + seg.downloaded;
-        await handle.write(toWrite, 0, toWrite.length, position);
-        seg.downloaded += toWrite.length;
-        onBytes();
+        const expectedSegmentLen = seg.end >= seg.start ? seg.end - seg.start + 1 : null;
+        let pendingChunks: Buffer[] = [];
+        let pendingBytes = 0;
+        let lastFlushAt = Date.now();
 
-        if (expectedSegmentLen !== null && seg.downloaded >= expectedSegmentLen) {
-          res.destroy();
-          break;
+        const flushPending = async (): Promise<void> => {
+          if (pendingBytes <= 0) return;
+          if (task.stoppedByUser || task.controller.signal.aborted) {
+            throw createAbortError();
+          }
+          const combined =
+            pendingChunks.length === 1 ? pendingChunks[0] : Buffer.concat(pendingChunks, pendingBytes);
+          pendingChunks = [];
+          pendingBytes = 0;
+          lastFlushAt = Date.now();
+          const position = seg.start + seg.downloaded;
+          await handle.write(combined, 0, combined.length, position);
+          seg.downloaded += combined.length;
+          onBytes();
+        };
+
+        for await (const rawChunk of res) {
+          if (task.stoppedByUser || task.controller.signal.aborted) {
+            throw createAbortError();
+          }
+          const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+          let toWrite = chunk;
+          if (expectedSegmentLen !== null) {
+            const remaining = expectedSegmentLen - (seg.downloaded + pendingBytes);
+            if (remaining <= 0) break;
+            if (toWrite.length > remaining) {
+              toWrite = toWrite.subarray(0, remaining);
+            }
+          }
+          if (toWrite.length === 0) continue;
+
+          await throttleBucket.consume(toWrite.length, task.controller.signal);
+
+          if (task.stoppedByUser || task.controller.signal.aborted) {
+            throw createAbortError();
+          }
+
+          pendingChunks.push(toWrite);
+          pendingBytes += toWrite.length;
+
+          const throttled = throttleBucket.getLimit() !== null;
+          const reachedSegmentEnd =
+            expectedSegmentLen !== null && seg.downloaded + pendingBytes >= expectedSegmentLen;
+          const flushWindowElapsed = Date.now() - lastFlushAt >= WRITE_FLUSH_INTERVAL_MS;
+
+          if (throttled || pendingBytes >= WRITE_BUFFER_BYTES || flushWindowElapsed || reachedSegmentEnd) {
+            await flushPending();
+          }
+
+          if (reachedSegmentEnd) {
+            res.destroy();
+            break;
+          }
         }
-      }
 
-      if (expectedSegmentLen !== null && seg.downloaded < expectedSegmentLen) {
-        throw new Error(`Incomplete segment ${seg.index + 1} (${seg.downloaded}/${expectedSegmentLen})`);
+        await flushPending();
+
+        if (expectedSegmentLen !== null && seg.downloaded < expectedSegmentLen) {
+          throw new Error(`Incomplete segment ${seg.index + 1} (${seg.downloaded}/${expectedSegmentLen})`);
+        }
+      } finally {
+        task.controller.signal.removeEventListener('abort', cleanupOnAbort);
+        res.destroy();
       }
-    } finally {
-      task.controller.signal.removeEventListener('abort', cleanupOnAbort);
-      res.destroy();
-    }
   }
 
   private async performProbeRequest(
@@ -576,6 +611,7 @@ export class HttpDownloadEngine {
         url,
         {
           method,
+          agent: url.protocol === 'https:' ? this.httpsAgent : this.httpAgent,
           headers: {
             'User-Agent': USER_AGENT,
             ...extraHeaders,
@@ -639,6 +675,7 @@ export class HttpDownloadEngine {
         url,
         {
           method: 'GET',
+          agent: url.protocol === 'https:' ? this.httpsAgent : this.httpAgent,
           headers,
         },
         (res) => {
@@ -668,6 +705,7 @@ export class HttpDownloadEngine {
         }
       );
 
+      req.setNoDelay(true);
       task.requests.add(req);
       req.setTimeout(REQUEST_TIMEOUT_MS, () => {
         req.destroy(new Error('Request timed out'));
@@ -699,7 +737,7 @@ export function buildInitialSegments(
     ];
   }
 
-  const count = Math.max(1, Math.min(16, Math.floor(requestedConnections)));
+  const count = Math.max(1, Math.min(MAX_HTTP_CONNECTIONS, Math.floor(requestedConnections)));
   const chunkSize = Math.floor(totalBytes / count);
   const segments: SegmentInfo[] = [];
 

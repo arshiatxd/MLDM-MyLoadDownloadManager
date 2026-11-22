@@ -268,6 +268,7 @@ export interface AppSettings {
   multiPartDefaultAction: MultiPartDefaultAction;
   startOnStartup: boolean;
   autoCheckUpdates: boolean;
+  hideUpdatePrompt: boolean;
   language: AppLanguage;
 }
 

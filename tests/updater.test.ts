@@ -143,5 +143,32 @@ describe('GitHub UpdateService & semver utilities', () => {
     expect(observedStates).toContain('downloading');
     expect(observedStates).toContain('downloaded');
   });
+
+  it('cleans up leftover installer executables and part files on startup while ignoring unrelated files and missing dirs', async () => {
+    const missingUpdater = new UpdateService({
+      currentVersion: '1.0.12',
+      downloadDir: path.join(tmpDir, 'non-existent-updates'),
+    });
+    expect(await missingUpdater.cleanupDownloadedInstallers()).toBe(0);
+
+    const updatesDir = path.join(tmpDir, 'cleanup-updates');
+    await fs.promises.mkdir(updatesDir, { recursive: true });
+    const oldExe = path.join(updatesDir, 'MyLoad-Download-Manager-Installer-1.0.1-x64.exe');
+    const oldPart = path.join(updatesDir, 'MyLoad-Download-Manager-Installer-1.0.12-x64.exe.part');
+    const unrelatedNote = path.join(updatesDir, 'notes.txt');
+    await fs.promises.writeFile(oldExe, 'exe-bytes');
+    await fs.promises.writeFile(oldPart, 'part-bytes');
+    await fs.promises.writeFile(unrelatedNote, 'keep-me');
+
+    const updater = new UpdateService({
+      currentVersion: '1.0.12',
+      downloadDir: updatesDir,
+    });
+    const removedCount = await updater.cleanupDownloadedInstallers();
+    expect(removedCount).toBe(2);
+    expect(fs.existsSync(oldExe)).toBe(false);
+    expect(fs.existsSync(oldPart)).toBe(false);
+    expect(fs.existsSync(unrelatedNote)).toBe(true);
+  });
 });
 

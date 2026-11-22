@@ -455,11 +455,14 @@ app.whenReady().then(() => {
   lastStartupEnabled = manager.getSettings().startOnStartup;
   syncStartupLoginItem(lastStartupEnabled);
 
-  if (process.env.MYLOAD_SMOKE_TEST !== '1' && manager.getSettings().autoCheckUpdates) {
-    startupUpdateTimer = setTimeout(() => {
-      startupUpdateTimer = null;
-      void updater.checkForUpdates();
-    }, 4000);
+  if (process.env.MYLOAD_SMOKE_TEST !== '1') {
+    void updater.cleanupDownloadedInstallers();
+    if (manager.getSettings().autoCheckUpdates) {
+      startupUpdateTimer = setTimeout(() => {
+        startupUpdateTimer = null;
+        void updater.checkForUpdates();
+      }, 2000);
+    }
   }
 });
 

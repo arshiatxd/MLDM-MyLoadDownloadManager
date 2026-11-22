@@ -145,7 +145,7 @@ export class DownloadManager {
     this.defaultDownloadDir = opts.defaultDownloadDir;
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.1';
+    this.appVersion = opts.appVersion ?? '1.0.12';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
@@ -1099,7 +1099,7 @@ export class DownloadManager {
       this.observedAggregatePeak = currentDlSpeed;
     }
 
-    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 18 : 35);
+    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 18 : 80);
     this.networkBalancer.configure({
       enabled: this.settings.gamingModeEnabled,
       active: activeItems.length > 0,

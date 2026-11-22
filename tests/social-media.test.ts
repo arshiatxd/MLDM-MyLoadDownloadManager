@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserBridgeServer } from '../src/main/bridge';
+import { DownloadManager } from '../src/main/download-manager';
 import { LogManager } from '../src/main/logger';
 import {
   detectPrivateError,
@@ -12,8 +13,15 @@ import {
   parseTikTokRehydrationHtml,
   validatePlatformUrl,
 } from '../src/main/social-parsers';
+import { StateStore } from '../src/main/store';
 import { createZipArchive } from '../src/main/zip-builder';
-import type { SocialDownloadRequest, SocialScanResult } from '../src/shared/types';
+import { createDefaultSettings } from '../src/shared/constants';
+import type {
+  BrowserInterceptPayload,
+  PopupSessionData,
+  SocialDownloadRequest,
+  SocialScanResult,
+} from '../src/shared/types';
 
 const EXT_HEADERS = {
   'Content-Type': 'application/json',
@@ -410,6 +418,131 @@ describe('BrowserBridgeServer media endpoints', () => {
     const dlJson = (await dlOk.json()) as { ok: boolean; count: number };
     expect(dlJson).toEqual({ ok: true, count: 1 });
     expect(downloadMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DownloadManager social media confirmation workflow', () => {
+  const managers: DownloadManager[] = [];
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(managers.splice(0).map((m) => m.shutdown()));
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))
+    );
+  });
+
+  it('opens confirmation popup instead of auto-starting social media downloads', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'myload-social-confirm-'));
+    tempDirs.push(tmpDir);
+    const defaultDir = path.join(tmpDir, 'Downloads');
+    const customDir = path.join(tmpDir, 'Videos');
+    await fs.mkdir(defaultDir, { recursive: true });
+    await fs.mkdir(customDir, { recursive: true });
+
+    const statePath = path.join(tmpDir, 'state.json');
+    const seedStore = new StateStore(statePath, defaultDir);
+    await seedStore.save([], {
+      ...createDefaultSettings(defaultDir),
+      browserBridgeEnabled: true,
+      browserBridgePort: 19767,
+      useCompactDownloadPopup: true,
+      autoDownloadOnClick: true,
+      showConfirmationDialog: true,
+    });
+
+    const compactCalls: Array<Omit<PopupSessionData, 'sessionId'>> = [];
+    const interceptCalls: BrowserInterceptPayload[] = [];
+    const focusCalls = vi.fn();
+
+    const manager = new DownloadManager({
+      stateFilePath: statePath,
+      logFilePath: null,
+      defaultDownloadDir: defaultDir,
+      appVersion: '1.0.1',
+      enableBridge: true,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => undefined,
+        executeSystemAction: async () => undefined,
+      },
+      callbacks: {
+        onOpenCompactPopup: (data) => compactCalls.push(data),
+        onBrowserIntercept: (payload) => interceptCalls.push(payload),
+        onFocusRequested: focusCalls,
+      },
+    });
+    managers.push(manager);
+    manager.start();
+
+    const deadline = Date.now() + 2500;
+    while (!manager.getBridgeStatus().running && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(manager.getBridgeStatus().running).toBe(true);
+
+    const bridgePort = manager.getBridgeStatus().port;
+    const reqBody: SocialDownloadRequest = {
+      platform: 'youtube',
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: 'Sample Clip',
+      format: 'mp4',
+      quality: '1080p',
+      items: [
+        {
+          id: 'item-1',
+          index: 0,
+          kind: 'video',
+          title: 'Sample Clip',
+          sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          ext: 'mp4',
+        },
+      ],
+    };
+
+    const compactRes = await fetch(`http://127.0.0.1:${bridgePort}/api/v1/media/download`, {
+      method: 'POST',
+      headers: EXT_HEADERS,
+      body: JSON.stringify(reqBody),
+    });
+    expect(compactRes.status).toBe(200);
+    const compactJson = (await compactRes.json()) as {
+      ok: boolean;
+      count: number;
+      mode?: string;
+    };
+    expect(compactJson).toEqual({ ok: true, count: 1, mode: 'confirm' });
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0].mode).toBe('confirm');
+    expect(compactCalls[0].socialRequest?.fileName).toBe('Sample Clip.mp4');
+    expect(manager.getSnapshot().downloads).toHaveLength(0);
+
+    manager.updateSettings({ useCompactDownloadPopup: false });
+    const modalRes = await fetch(`http://127.0.0.1:${bridgePort}/api/v1/media/download`, {
+      method: 'POST',
+      headers: EXT_HEADERS,
+      body: JSON.stringify(reqBody),
+    });
+    expect(modalRes.status).toBe(200);
+    expect(focusCalls).toHaveBeenCalledTimes(1);
+    expect(interceptCalls).toHaveLength(1);
+    expect(interceptCalls[0].socialRequest?.fileName).toBe('Sample Clip.mp4');
+    expect(manager.getSnapshot().downloads).toHaveLength(0);
+
+    const added = await manager.addSocialDownload({
+      ...compactCalls[0].socialRequest!,
+      saveDir: customDir,
+      fileName: 'Custom Video.mp4',
+      startPaused: true,
+    });
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({
+      kind: 'media',
+      status: 'paused',
+      name: 'Custom Video.mp4',
+      saveDir: customDir,
+      filePath: path.join(customDir, 'Custom Video.mp4'),
+    });
   });
 });
 

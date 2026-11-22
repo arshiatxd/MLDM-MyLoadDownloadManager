@@ -13,6 +13,7 @@ import {
   deriveNameFromSource,
   extractMultipleSources,
   formatBytes,
+  formatSocialRequestSummary,
   hasUnsafeFileNameWarning,
   isHttpUrl,
   isMagnetUri,
@@ -29,6 +30,7 @@ import type {
   MultiPartScanResult,
   ProbeResult,
   QueueMode,
+  SocialDownloadRequest,
 } from '../../shared/types';
 import { CustomSelect } from './CustomSelect';
 import { DirectoryStatusBanner } from './DirectoryStatusBanner';
@@ -40,6 +42,7 @@ export interface AddDownloadInitialRequest {
   fileSize?: number | null;
   requestHeaders?: Record<string, string>;
   relatedParts?: Array<{ url: string; fileName?: string }>;
+  socialRequest?: SocialDownloadRequest;
 }
 
 interface AddDownloadModalProps {
@@ -49,6 +52,7 @@ interface AddDownloadModalProps {
   onClose: () => void;
   onConfirm: (req: AddDownloadRequest) => Promise<void>;
   onConfirmBatch: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) => Promise<void>;
+  onConfirmSocial?: (req: SocialDownloadRequest) => Promise<void>;
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
 }
 
@@ -59,6 +63,7 @@ export function AddDownloadModal({
   onClose,
   onConfirm,
   onConfirmBatch,
+  onConfirmSocial,
   onUpdateSettings,
 }: AddDownloadModalProps) {
   const [source, setSource] = useState('');
@@ -153,17 +158,24 @@ export function AddDownloadModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  const socialRequest = initialRequest?.socialRequest;
+  const isMultiSlideSocial = Boolean(
+    socialRequest &&
+      (socialRequest.platform === 'instagram' || socialRequest.platform === 'tiktok') &&
+      socialRequest.items.length > 1
+  );
   const extractedSources = extractMultipleSources(source);
   const isBatchMode = extractedSources.length > 1;
 
   useEffect(() => {
     if (!open) return;
-    if (isBatchMode) {
+    if (isBatchMode || socialRequest) {
       setProbing(false);
       setProbe(null);
       setProbeError(null);
       setScanningParts(false);
       setScanResult(null);
+      setSelectedPartUrls([]);
       return;
     }
 
@@ -262,6 +274,7 @@ export function AddDownloadModal({
     open,
     source,
     isBatchMode,
+    socialRequest,
     requestHeaders,
     initialRequest?.fileName,
     initialRequest?.relatedParts,
@@ -412,6 +425,18 @@ export function AddDownloadModal({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      if (socialRequest && onConfirmSocial) {
+        await onConfirmSocial({
+          ...socialRequest,
+          saveDir: saveDir.trim(),
+          fileName: isMultiSlideSocial ? undefined : fileName.trim() || undefined,
+          startPaused,
+          alwaysUseThisFolder: alwaysUseDir,
+        });
+        onClose();
+        return;
+      }
+
       if (isBatchMode) {
         const batchSaveDir =
           settings.folderRoutingMode === 'per-category' && !saveDirTouched ? '' : saveDir.trim();
@@ -531,6 +556,7 @@ export function AddDownloadModal({
                 id="download-source-input"
                 rows={2}
                 autoFocus
+                readOnly={Boolean(socialRequest)}
                 value={source}
                 onChange={(e) => {
                   setSource(e.target.value);
@@ -539,27 +565,35 @@ export function AddDownloadModal({
                 placeholder="https://example.com/file.zip (paste multiple lines for batch queue) or magnet:?xt=..."
                 className="ml-input flex-1 resize-y text-[13px]"
               />
-              <div className="flex flex-col gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => void handlePaste()}
-                  title="Paste from clipboard"
-                  className="inline-flex h-8 items-center justify-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
-                >
-                  <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Paste</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleBrowseTorrent()}
-                  title="Choose local .torrent file"
-                  className="inline-flex h-8 items-center justify-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
-                >
-                  <FileUp className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>.torrent</span>
-                </button>
-              </div>
+              {!socialRequest && (
+                <div className="flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void handlePaste()}
+                    title="Paste from clipboard"
+                    className="inline-flex h-8 items-center justify-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                  >
+                    <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Paste</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBrowseTorrent()}
+                    title="Choose local .torrent file"
+                    className="inline-flex h-8 items-center justify-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                  >
+                    <FileUp className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>.torrent</span>
+                  </button>
+                </div>
+              )}
             </div>
+
+            {socialRequest && (
+              <div className="mt-1.5 text-[11.5px] font-medium text-[var(--accent-text)]">
+                {formatSocialRequestSummary(socialRequest)}
+              </div>
+            )}
 
             {isBatchMode && (
               <div className="mt-2 space-y-2 rounded-xl border border-[var(--accent)]/45 bg-[var(--accent-soft)]/30 p-2.5 text-xs">
@@ -688,7 +722,7 @@ export function AddDownloadModal({
             <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} />
           </div>
 
-          {!isBatchMode && !(multiPartActive && downloadAllParts) && (
+          {!isBatchMode && !(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
             <div>
               <label
                 htmlFor="download-filename-input"

@@ -13,6 +13,7 @@ import type {
   DownloadItem,
   PowerAction,
   QueueMode,
+  SocialDownloadRequest,
   SortBy,
 } from '../shared/types';
 import { AboutModal } from './components/AboutModal';
@@ -125,6 +126,7 @@ export function App() {
         fileSize: payload.fileSize ?? null,
         requestHeaders: Object.keys(headers).length > 0 ? headers : undefined,
         relatedParts: payload.relatedParts,
+        socialRequest: payload.socialRequest,
       });
       setAddModalOpen(true);
     },
@@ -442,6 +444,14 @@ export function App() {
     announce(`Added ${created.length} downloads to queue`);
   };
 
+  const handleAddSocialConfirm = async (req: SocialDownloadRequest) => {
+    const created = await window.myload.addSocialDownload(req);
+    if (created[0]) {
+      setFocusedId(created[0].id);
+    }
+    announce(`Added ${created[0]?.name || req.title}`);
+  };
+
   const handleResumeSelected = () => {
     for (const item of selectedItems) {
       if (item.status === 'paused' || item.status === 'error') {
@@ -702,6 +712,7 @@ export function App() {
         }}
         onConfirm={handleAddConfirm}
         onConfirmBatch={handleAddBatchConfirm}
+        onConfirmSocial={handleAddSocialConfirm}
         onUpdateSettings={handleUpdateSettings}
       />
 

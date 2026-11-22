@@ -155,7 +155,7 @@ export class DownloadManager {
       },
       onIntercept: (payload) => this.handleBrowserIntercept(payload),
       onMediaScan: (platform, url) => this.socialDownloader.scan(platform, url),
-      onMediaDownload: (req) => this.enqueueSocialDownload(req),
+      onMediaDownload: (req) => this.handleBridgeMediaDownload(req),
     });
 
     const loaded = this.store.load();
@@ -971,65 +971,126 @@ export class DownloadManager {
     bucket.dispose();
   }
 
-  private async enqueueSocialDownload(
+  private async handleBridgeMediaDownload(
     req: SocialDownloadRequest
-  ): Promise<{ ok: boolean; count: number; error?: string }> {
-    try {
-      let count = 0;
-
-      if (req.platform === 'instagram' || req.platform === 'tiktok') {
-        const directSlides = req.items.filter((item) => isDirectHttpSlide(req, item));
-        const toolItems = req.items.filter((item) => !isDirectHttpSlide(req, item));
-        const referer =
-          req.platform === 'instagram'
-            ? 'https://www.instagram.com/'
-            : 'https://www.tiktok.com/';
-
-        for (const slide of directSlides) {
-          const ext = slide.ext || (slide.kind === 'image' ? 'jpg' : 'mp4');
-          const baseName = sanitizeFileName(`${slide.title || req.title || 'slide'}.${ext}`);
-          await this.addDownload({
-            source: slide.mediaUrl!,
-            kind: 'http',
-            saveDir: '',
-            fileName: baseName,
-            requestHeaders: { Referer: referer },
-          });
-          count += 1;
-        }
-
-        for (const item of toolItems) {
-          await this.enqueueSingleMediaJob({
-            ...req,
-            title: item.title || req.title,
-            items: [item],
-          });
-          count += 1;
-        }
-
-        return { ok: count > 0, count };
-      }
-
-      await this.enqueueSingleMediaJob(req);
-      count = 1;
-      return { ok: true, count };
-    } catch (err) {
-      return {
-        ok: false,
-        count: 0,
-        error: err instanceof Error ? err.message : 'Unable to queue media download',
-      };
+  ): Promise<{ ok: boolean; count: number; mode?: 'confirm' | 'started'; error?: string }> {
+    if (!req.items || req.items.length === 0) {
+      return { ok: false, count: 0, error: 'Select at least one media item to download.' };
     }
+
+    const suggestedFileName = deriveSocialPrimaryItemName(req);
+    const promptReq: SocialDownloadRequest = {
+      ...req,
+      fileName: req.fileName?.trim() || suggestedFileName,
+    };
+
+    if (this.settings.useCompactDownloadPopup) {
+      this.callbacks.onOpenCompactPopup?.({
+        mode: 'confirm',
+        socialRequest: promptReq,
+      });
+    } else {
+      this.callbacks.onFocusRequested?.();
+      this.callbacks.onBrowserIntercept?.({
+        url: promptReq.url,
+        fileName: suggestedFileName,
+        socialRequest: promptReq,
+      });
+    }
+
+    this.logger.info(
+      'Media',
+      `Opened confirmation dialog for ${req.platform} media: ${suggestedFileName}`
+    );
+    return { ok: true, count: req.items.length, mode: 'confirm' };
   }
 
-  private async enqueueSingleMediaJob(req: SocialDownloadRequest): Promise<DownloadItem> {
+  async addSocialDownload(req: SocialDownloadRequest): Promise<DownloadItem[]> {
+    const created: DownloadItem[] = [];
+    const customSaveDir = req.saveDir?.trim() || '';
+    const startPaused = Boolean(req.startPaused);
+    let appliedFolderDefault = false;
+
+    if (req.platform === 'instagram' || req.platform === 'tiktok') {
+      const directSlides = req.items.filter((item) => isDirectHttpSlide(req, item));
+      const toolItems = req.items.filter((item) => !isDirectHttpSlide(req, item));
+      const referer =
+        req.platform === 'instagram'
+          ? 'https://www.instagram.com/'
+          : 'https://www.tiktok.com/';
+
+      for (const slide of directSlides) {
+        const ext = slide.ext || (slide.kind === 'image' ? 'jpg' : 'mp4');
+        const singleCustomName =
+          req.items.length === 1 && req.fileName?.trim()
+            ? sanitizeFileName(req.fileName.trim())
+            : undefined;
+        const baseName =
+          singleCustomName ||
+          sanitizeFileName(`${slide.title || req.title || 'slide'}.${ext}`);
+        const item = await this.addDownload({
+          source: slide.mediaUrl!,
+          kind: 'http',
+          saveDir: customSaveDir,
+          fileName: baseName,
+          startPaused,
+          alwaysUseThisFolder: !appliedFolderDefault ? Boolean(req.alwaysUseThisFolder) : false,
+          requestHeaders: { Referer: referer },
+        });
+        appliedFolderDefault = true;
+        created.push(item);
+      }
+
+      for (const toolItem of toolItems) {
+        const item = await this.enqueueSingleMediaJob(
+          {
+            ...req,
+            title: toolItem.title || req.title,
+            fileName: req.items.length === 1 ? req.fileName : undefined,
+            items: [toolItem],
+          },
+          !appliedFolderDefault
+        );
+        appliedFolderDefault = true;
+        created.push(item);
+      }
+
+      return created;
+    }
+
+    const single = await this.enqueueSingleMediaJob(req, true);
+    created.push(single);
+    return created;
+  }
+
+  private async enqueueSingleMediaJob(
+    req: SocialDownloadRequest,
+    applyFolderDefault: boolean
+  ): Promise<DownloadItem> {
     const displayName = deriveSocialPrimaryItemName(req);
-    const targetSaveDir = resolveSaveDirForFile(this.settings, displayName, 'http');
-    const dirCheck = await validateSaveDirectory(targetSaveDir, null);
+    const requestedSaveDir =
+      req.saveDir?.trim() || resolveSaveDirForFile(this.settings, displayName, 'http');
+    const dirCheck = await validateSaveDirectory(requestedSaveDir, null);
     if (!dirCheck.valid) {
       throw new Error(dirCheck.error || 'Invalid download folder');
     }
 
+    if (applyFolderDefault && req.alwaysUseThisFolder) {
+      if (this.settings.folderRoutingMode === 'per-category') {
+        const cat = classifyFileName(displayName, 'http');
+        this.settings.categoryDownloadDirs = {
+          ...this.settings.categoryDownloadDirs,
+          [cat]: dirCheck.normalizedPath,
+        };
+      } else {
+        this.settings.defaultDownloadDir = dirCheck.normalizedPath;
+        this.settings.alwaysUseDefaultDir = true;
+      }
+      this.callbacks.onSettingsUpdated?.({ ...this.settings });
+    }
+    this.recordRecentDir(dirCheck.normalizedPath);
+
+    const startPaused = Boolean(req.startPaused);
     const item: DownloadItem = {
       id: crypto.randomUUID(),
       kind: 'media',
@@ -1038,7 +1099,7 @@ export class DownloadManager {
       saveDir: dirCheck.normalizedPath,
       filePath: path.join(dirCheck.normalizedPath, sanitizeFileName(displayName)),
       category: classifyFileName(displayName, 'http'),
-      status: 'queued',
+      status: startPaused ? 'paused' : 'queued',
       totalBytes: null,
       downloadedBytes: 0,
       uploadedBytes: 0,
@@ -1053,9 +1114,15 @@ export class DownloadManager {
 
     this.pendingMediaJobs.set(item.id, req);
     this.downloads.unshift(item);
-    this.logger.info('Media', `Queued ${req.platform} media: ${item.name}`, item.id);
+    this.logger.info(
+      'Media',
+      `${startPaused ? 'Added paused' : 'Queued'} ${req.platform} media: ${item.name}`,
+      item.id
+    );
     this.emitAndSaveImmediate();
-    this.scheduleQueue();
+    if (!startPaused) {
+      this.scheduleQueue();
+    }
     return item;
   }
 

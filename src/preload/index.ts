@@ -9,6 +9,7 @@ import type {
   MyLoadApi,
   QueueMode,
   ShutdownCountdownState,
+  SocialDownloadRequest,
   UpdateStatus,
 } from '../shared/types';
 
@@ -36,6 +37,8 @@ const api: MyLoadApi = {
   addDownload: (req: AddDownloadRequest) => ipcRenderer.invoke('myload:add-download', req),
   addBatchDownloads: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) =>
     ipcRenderer.invoke('myload:add-batch-downloads', reqs, queueModeOverride),
+  addSocialDownload: (req: SocialDownloadRequest) =>
+    ipcRenderer.invoke('myload:add-social-download', req),
   scanMultiParts: (
     url: string,
     requestHeaders?: Record<string, string>,

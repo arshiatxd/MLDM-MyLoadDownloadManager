@@ -69,6 +69,10 @@ export interface SocialDownloadRequest {
   quality?: MediaQuality;
   bundleMode?: PlaylistBundleMode;
   items: SocialMediaItem[];
+  saveDir?: string;
+  fileName?: string;
+  startPaused?: boolean;
+  alwaysUseThisFolder?: boolean;
 }
 
 export type DownloadStatus =
@@ -176,6 +180,7 @@ export interface PopupSessionData {
   sessionId: string;
   mode: 'confirm' | 'progress';
   initialPayload?: BrowserInterceptPayload;
+  socialRequest?: SocialDownloadRequest;
   downloadId?: string;
   downloadIds?: string[];
 }
@@ -293,6 +298,7 @@ export interface BrowserInterceptPayload {
   fileSize?: number | null;
   mime?: string;
   relatedParts?: Array<{ url: string; fileName?: string }>;
+  socialRequest?: SocialDownloadRequest;
 }
 
 export interface BridgeStatus {
@@ -401,6 +407,7 @@ export interface MyLoadApi {
   validateDirectory: (dirPath: string, requiredBytes?: number | null) => Promise<DirectoryValidationResult>;
   addDownload: (req: AddDownloadRequest) => Promise<DownloadItem>;
   addBatchDownloads: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) => Promise<DownloadItem[]>;
+  addSocialDownload: (req: SocialDownloadRequest) => Promise<DownloadItem[]>;
   scanMultiParts: (
     url: string,
     requestHeaders?: Record<string, string>,

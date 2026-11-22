@@ -499,7 +499,10 @@ async function handleDownloadMedia() {
     if (!res.ok || !data.ok) {
       st.error = data.error || 'Failed to queue download in MyLoad.';
     } else {
-      st.feedback = `Queued ${data.count} item(s) in MyLoad Download Manager!`;
+      st.feedback =
+        data.mode === 'confirm'
+          ? 'Opened download confirmation in MyLoad Download Manager.'
+          : `Queued ${data.count} item(s) in MyLoad Download Manager!`;
     }
   } catch {
     st.error = 'Unable to send download to MyLoad Download Manager.';

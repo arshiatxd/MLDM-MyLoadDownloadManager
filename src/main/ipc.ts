@@ -13,6 +13,7 @@ import type {
   AppSettings,
   PopupSessionData,
   QueueMode,
+  SocialDownloadRequest,
 } from '../shared/types';
 import type { DownloadManager } from './download-manager';
 import type { UpdateService } from './updater';
@@ -70,6 +71,9 @@ export function registerIpcHandlers(params: {
     'myload:add-batch-downloads',
     (_e, reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) =>
       manager.addBatchDownloads(reqs, queueModeOverride)
+  );
+  ipcMain.handle('myload:add-social-download', (_e, req: SocialDownloadRequest) =>
+    manager.addSocialDownload(req)
   );
   ipcMain.handle(
     'myload:scan-multiparts',

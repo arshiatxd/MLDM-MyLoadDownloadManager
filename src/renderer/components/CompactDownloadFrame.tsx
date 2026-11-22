@@ -18,6 +18,7 @@ import {
   deriveNameFromSource,
   formatBytes,
   formatEta,
+  formatSocialRequestSummary,
   formatSpeed,
   hasUnsafeFileNameWarning,
   isHttpUrl,
@@ -36,6 +37,7 @@ import type {
   PopupSessionData,
   ProbeResult,
   QueueMode,
+  SocialDownloadRequest,
 } from '../../shared/types';
 import { applyDocumentAppearance } from '../utils/theme';
 import { DirectoryStatusBanner } from './DirectoryStatusBanner';
@@ -75,6 +77,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   const [downloadAllParts, setDownloadAllParts] = useState(true);
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>('parallel');
   const [dontAskAgain, setDontAskAgain] = useState(false);
+  const [socialRequest, setSocialRequest] = useState<SocialDownloadRequest | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saveDirTouched, setSaveDirTouched] = useState(false);
@@ -127,6 +130,16 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         setRequestHeaders(Object.keys(headers).length > 0 ? headers : undefined);
         setSuggestedSize(p.fileSize ?? null);
         setAlwaysUseDir(snap.settings.alwaysUseDefaultDir);
+      } else if (ses.socialRequest) {
+        const sr = ses.socialRequest;
+        setSocialRequest(sr);
+        setSource(sr.url);
+        setSaveDir(snap.settings.defaultDownloadDir);
+        setSaveDirTouched(false);
+        setFileName(sr.fileName?.trim() || sr.title);
+        setRequestHeaders(undefined);
+        setSuggestedSize(null);
+        setAlwaysUseDir(snap.settings.alwaysUseDefaultDir);
       }
 
       setLoadingSession(false);
@@ -145,7 +158,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   }, [sessionId]);
 
   useEffect(() => {
-    if (mode !== 'confirm' || !source.trim()) return;
+    if (mode !== 'confirm' || !source.trim() || socialRequest) return;
     let canceled = false;
     setProbing(true);
     void window.myload
@@ -211,6 +224,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   }, [
     mode,
     source,
+    socialRequest,
     requestHeaders,
     session?.initialPayload?.fileName,
     session?.initialPayload?.relatedParts,
@@ -221,6 +235,11 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
 
   const multiPartActive = Boolean(scanResult?.matched && (scanResult.parts.length ?? 0) > 1);
   const torrentFiles = probe?.files ?? [];
+  const isMultiSlideSocial = Boolean(
+    socialRequest &&
+      (socialRequest.platform === 'instagram' || socialRequest.platform === 'tiktok') &&
+      socialRequest.items.length > 1
+  );
 
   const detectedKind: DownloadKind =
     probe?.kind ??
@@ -358,6 +377,24 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         });
       }
 
+      if (socialRequest) {
+        const created = await window.myload.addSocialDownload({
+          ...socialRequest,
+          saveDir: saveDir.trim(),
+          fileName: isMultiSlideSocial ? undefined : fileName.trim() || undefined,
+          startPaused,
+          alwaysUseThisFolder: alwaysUseDir,
+        });
+        if (startPaused) {
+          await window.myload.closeWindow();
+          return;
+        }
+        setTrackedIds(created.map((d) => d.id));
+        setMode('progress');
+        await window.myload.resizeCurrentWindow(520, 320);
+        return;
+      }
+
       if (multiPartActive && downloadAllParts && selectedParts.length > 1) {
         const created = await window.myload.addBatchDownloads(
           selectedParts.map((part) => ({
@@ -493,6 +530,11 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             <div className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]" title={source}>
               {source}
             </div>
+            {socialRequest && (
+              <div className="mt-1 text-[11px] font-medium text-[var(--accent-text)]">
+                {formatSocialRequestSummary(socialRequest)}
+              </div>
+            )}
             {probing && (
               <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--accent-text)]">
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -564,7 +606,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             <DirectoryStatusBanner validation={dirValidation} checking={checkingDir} compact />
           </div>
 
-          {!(multiPartActive && downloadAllParts) && (
+          {!(multiPartActive && downloadAllParts) && !isMultiSlideSocial && (
             <div>
               <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
                 {t(settings.language, 'fileName')}

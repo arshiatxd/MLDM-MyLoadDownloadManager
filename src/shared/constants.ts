@@ -8,6 +8,7 @@ import type {
   FileCategory,
   NetworkBalanceStats,
   PowerAction,
+  SocialDownloadRequest,
   SpeedUnit,
 } from './types';
 
@@ -509,5 +510,28 @@ export function resolveSaveDirForFile(
   kind?: DownloadKind
 ): string {
   return resolveSaveDirForCategory(settings, classifyFileName(fileName, kind));
+}
+
+export function formatSocialRequestSummary(req: SocialDownloadRequest): string {
+  const names: Record<SocialDownloadRequest['platform'], string> = {
+    youtube: 'YouTube',
+    instagram: 'Instagram',
+    tiktok: 'TikTok',
+    spotify: 'Spotify',
+  };
+  const parts: string[] = [names[req.platform] || req.platform];
+  if (req.format) {
+    parts.push(req.format.toUpperCase());
+  }
+  if (req.quality && req.quality !== 'best') {
+    parts.push(req.quality);
+  }
+  if (req.platform === 'spotify' && req.items.length > 1) {
+    parts.push(req.bundleMode === 'zip' ? 'ZIP archive' : 'Individual files');
+  }
+  if (req.items.length > 1) {
+    parts.push(`${req.items.length} items`);
+  }
+  return parts.join(' · ');
 }
 

@@ -493,8 +493,13 @@ export class SocialMediaDownloader {
     }
 
     const selected = req.items[0];
-    const baseTitle = sanitizeFileName(selected?.title || req.title || 'media');
-    const uniqueTarget = await allocateUniqueFilePath(opts.saveDir, `${baseTitle}.${format}`);
+    const customName = req.fileName?.trim();
+    const desiredName = customName
+      ? sanitizeFileName(
+          customName.toLowerCase().endsWith(`.${format}`) ? customName : `${customName}.${format}`
+        )
+      : `${sanitizeFileName(selected?.title || req.title || 'media')}.${format}`;
+    const uniqueTarget = await allocateUniqueFilePath(opts.saveDir, desiredName);
     const outDir = path.dirname(uniqueTarget);
     const outStem = path.basename(uniqueTarget, path.extname(uniqueTarget));
     const outputTemplate = path.join(outDir, `${outStem}.%(ext)s`);
@@ -634,7 +639,11 @@ export class SocialMediaDownloader {
 
     let destFolder = opts.saveDir;
     if (!isSingle && bundleMode === 'individual') {
-      destFolder = await allocateUniqueDirPath(opts.saveDir, req.title || 'Spotify Playlist');
+      const customFolder = req.fileName?.trim().replace(/\s*\(\d+\s+tracks?\)$/i, '').trim();
+      destFolder = await allocateUniqueDirPath(
+        opts.saveDir,
+        customFolder || req.title || 'Spotify Playlist'
+      );
     }
 
     const builtTracks: Array<{ name: string; filePath: string; bytes: number }> = [];
@@ -652,7 +661,14 @@ export class SocialMediaDownloader {
 
         const trackPrefix =
           totalCount > 1 ? `${String(i + 1).padStart(2, '0')} - ` : '';
-        const targetFileName = sanitizeFileName(`${trackPrefix}${artist} - ${title}.${format}`);
+        const customSingle = isSingle ? req.fileName?.trim() : undefined;
+        const targetFileName = sanitizeFileName(
+          customSingle
+            ? customSingle.toLowerCase().endsWith(`.${format}`)
+              ? customSingle
+              : `${customSingle}.${format}`
+            : `${trackPrefix}${artist} - ${title}.${format}`
+        );
         const finalTrackPath =
           bundleMode === 'zip' || !isSingle
             ? path.join(bundleMode === 'zip' ? stageDir : destFolder, targetFileName)
@@ -789,10 +805,11 @@ export class SocialMediaDownloader {
       }
 
       if (bundleMode === 'zip') {
-        const zipTarget = await allocateUniqueFilePath(
-          opts.saveDir,
-          `${sanitizeFileName(req.title || 'Spotify Playlist')}.zip`
-        );
+        const customZip = req.fileName?.trim();
+        const zipFileName = customZip
+          ? sanitizeFileName(customZip.toLowerCase().endsWith('.zip') ? customZip : `${customZip}.zip`)
+          : `${sanitizeFileName(req.title || 'Spotify Playlist')}.zip`;
+        const zipTarget = await allocateUniqueFilePath(opts.saveDir, zipFileName);
         const zipBytes = await createZipArchive(
           builtTracks.map((t) => ({ name: t.name, filePath: t.filePath })),
           zipTarget
@@ -814,6 +831,10 @@ export class SocialMediaDownloader {
 }
 
 export function deriveSocialPrimaryItemName(req: SocialDownloadRequest): string {
+  const custom = req.fileName?.trim();
+  if (custom) {
+    return sanitizeFileName(custom);
+  }
   const format: MediaOutputFormat = req.format || (req.platform === 'spotify' ? 'mp3' : 'mp4');
   if (req.platform === 'spotify') {
     if (req.items.length > 1) {
@@ -826,6 +847,10 @@ export function deriveSocialPrimaryItemName(req: SocialDownloadRequest): string 
     return sanitizeFileName(`${artist}${first?.title || req.title || 'Track'}.${format}`);
   }
   const first = req.items[0];
+  if (first?.kind === 'image') {
+    const imgExt = first.ext || 'jpg';
+    return sanitizeFileName(`${first.title || req.title || 'image'}.${imgExt}`);
+  }
   return sanitizeFileName(`${first?.title || req.title || 'media'}.${format}`);
 }
 

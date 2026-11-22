@@ -53,7 +53,7 @@ export interface BridgeHandlers {
   onMediaScan?: (platform: SocialPlatform, url: string) => Promise<SocialScanResult>;
   onMediaDownload?: (
     req: SocialDownloadRequest
-  ) => Promise<{ ok: boolean; count: number; error?: string }>;
+  ) => Promise<{ ok: boolean; count: number; mode?: 'confirm' | 'started'; error?: string }>;
 }
 
 export class BrowserBridgeServer {

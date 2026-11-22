@@ -48,37 +48,6 @@ MyLoad Download Manager includes a Manifest V3 Chromium extension under [`extens
 
 ---
 
-## Building from Source
-
-### Prerequisites
-
-- **Node.js** `20+` (and `npm`)
-- **Windows 10/11 x64** (for NSIS & portable Windows installer packaging)
-
-### Development & Verification Commands
-
-```powershell
-# Install dependencies
-npm install
-
-# Run in development mode (Vite + Electron hot watch)
-npm run dev
-
-# Typecheck main, preload, shared, and renderer
-npm run typecheck
-
-# Run unit & integration tests (Vitest)
-npm test
-
-# Build production bundles without packaging
-npm run build
-
-# Build Windows Installer Wizard & Portable EXE into release/
-npm run dist
-```
-
----
-
 ## Documentation
 
 - [Privacy Policy](PRIVACY.md)

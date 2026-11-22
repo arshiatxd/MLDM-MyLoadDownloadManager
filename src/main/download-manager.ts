@@ -47,6 +47,10 @@ import { NetworkBalancer } from './network-balancer';
 import { PowerManager, type PowerPlatformAdapter } from './power';
 import { isPathInsideDir, redactSensitiveUrl } from './security';
 import {
+  normalizeDownloadPriority,
+  sortItemsByPriority,
+} from '../shared/selection';
+import {
   SocialMediaDownloader,
   deriveSocialPrimaryItemName,
   isDirectHttpSlide,
@@ -278,7 +282,10 @@ export class DownloadManager {
     return validateSaveDirectory(dirPath, requiredBytes);
   }
 
-  async addDownload(req: AddDownloadRequest): Promise<DownloadItem> {
+  async addDownload(
+    req: AddDownloadRequest,
+    options?: { deferSchedule?: boolean }
+  ): Promise<DownloadItem> {
     const rawSource = req.source.trim();
     if (
       !rawSource ||
@@ -392,6 +399,7 @@ export class DownloadManager {
       addedAt: Date.now(),
       retryCount: 0,
       schedule,
+      priority: normalizeDownloadPriority(req.priority),
     };
 
     if (req.duplicateOverride) {
@@ -407,7 +415,7 @@ export class DownloadManager {
     );
     this.emitAndSaveImmediate();
 
-    if (!initialPaused) {
+    if (!initialPaused && !options?.deferSchedule) {
       this.scheduleQueue();
     }
 
@@ -426,11 +434,17 @@ export class DownloadManager {
     const created: DownloadItem[] = [];
     for (let i = 0; i < reqs.length; i += 1) {
       const req = reqs[i];
-      const item = await this.addDownload({
-        ...req,
-        alwaysUseThisFolder: i === 0 ? req.alwaysUseThisFolder : false,
-      });
+      const item = await this.addDownload(
+        {
+          ...req,
+          alwaysUseThisFolder: i === 0 ? req.alwaysUseThisFolder : false,
+        },
+        { deferSchedule: true }
+      );
       created.push(item);
+    }
+    if (created.some((item) => item.status === 'queued')) {
+      this.scheduleQueue();
     }
     this.markClipboardSourcesConsumed(reqs.map((r) => r.source));
     return created;
@@ -839,9 +853,9 @@ export class DownloadManager {
       return;
     }
 
-    const queued = [...this.downloads]
-      .reverse()
-      .filter((d) => d.status === 'queued');
+    const queued = sortItemsByPriority(
+      [...this.downloads].reverse().filter((d) => d.status === 'queued')
+    );
 
     for (const item of queued.slice(0, slots)) {
       const override = this.pendingDuplicateChoices.get(item.id);

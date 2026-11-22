@@ -90,6 +90,8 @@ export type DownloadStatus =
   | 'completed'
   | 'error';
 
+export type DownloadPriority = 'high' | 'normal' | 'low';
+
 export type FileCategory =
   | 'torrents'
   | 'images'
@@ -155,6 +157,7 @@ export interface DownloadItem {
   completedAt?: number;
   retryCount: number;
   schedule?: DownloadSchedule;
+  priority?: DownloadPriority;
 }
 
 export type SpeedUnit = 'KB/s' | 'MB/s';
@@ -297,6 +300,7 @@ export interface AddDownloadRequest {
   duplicateOverride?: 'auto-rename' | 'overwrite';
   requestHeaders?: Record<string, string>;
   schedule?: DownloadSchedule;
+  priority?: DownloadPriority;
 }
 
 export interface BrowserInterceptPayload {

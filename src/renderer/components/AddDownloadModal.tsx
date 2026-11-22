@@ -26,7 +26,9 @@ import type {
   AppSettings,
   DirectoryValidationResult,
   DownloadKind,
+  DownloadPriority,
   FileCategory,
+  MultiPartCandidate,
   MultiPartScanResult,
   ProbeResult,
   QueueMode,
@@ -94,6 +96,8 @@ export function AddDownloadModal({
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>(settings.queueMode);
   const [scanningParts, setScanningParts] = useState(false);
   const [scanResult, setScanResult] = useState<MultiPartScanResult | null>(null);
+  const [orderedParts, setOrderedParts] = useState<MultiPartCandidate[]>([]);
+  const [partPriorities, setPartPriorities] = useState<Record<string, DownloadPriority>>({});
   const [selectedPartUrls, setSelectedPartUrls] = useState<string[]>([]);
   const [downloadAllParts, setDownloadAllParts] = useState(true);
   const [dontAskAgain, setDontAskAgain] = useState(false);
@@ -125,6 +129,8 @@ export function AddDownloadModal({
     setBatchQueueMode(settings.queueMode);
     setScanningParts(false);
     setScanResult(null);
+    setOrderedParts([]);
+    setPartPriorities({});
     setSelectedPartUrls([]);
     setDownloadAllParts(true);
     setDontAskAgain(false);
@@ -188,6 +194,8 @@ export function AddDownloadModal({
       setProbeError(null);
       setScanningParts(false);
       setScanResult(null);
+      setOrderedParts([]);
+      setPartPriorities({});
       setSelectedPartUrls([]);
       return;
     }
@@ -198,6 +206,8 @@ export function AddDownloadModal({
       setProbeError(null);
       setFileName('');
       setScanResult(null);
+      setOrderedParts([]);
+      setPartPriorities({});
       setSelectedPartUrls([]);
       return;
     }
@@ -212,6 +222,8 @@ export function AddDownloadModal({
       setProbe(null);
       setProbeError('Enter an http(s):// URL, magnet:? link, or .torrent file path.');
       setScanResult(null);
+      setOrderedParts([]);
+      setPartPriorities({});
       return;
     }
 
@@ -256,16 +268,22 @@ export function AddDownloadModal({
             if (canceled) return;
             if (scan.matched && scan.parts.length > 1) {
               setScanResult(scan);
+              setOrderedParts(scan.parts);
+              setPartPriorities({});
               setSelectedPartUrls(scan.parts.map((p) => p.url));
               setDownloadAllParts(true);
             } else {
               setScanResult(null);
+              setOrderedParts([]);
+              setPartPriorities({});
               setSelectedPartUrls([]);
             }
           })
           .catch(() => {
             if (!canceled) {
               setScanResult(null);
+              setOrderedParts([]);
+              setPartPriorities({});
               setSelectedPartUrls([]);
             }
           })
@@ -275,6 +293,8 @@ export function AddDownloadModal({
       } else {
         setScanningParts(false);
         setScanResult(null);
+        setOrderedParts([]);
+        setPartPriorities({});
         setSelectedPartUrls([]);
       }
     }, 320);
@@ -297,8 +317,9 @@ export function AddDownloadModal({
   ]);
 
   const multiPartActive = Boolean(scanResult?.matched && (scanResult.parts.length ?? 0) > 1);
+  const activeOrderedParts = orderedParts.length > 0 ? orderedParts : scanResult?.parts ?? [];
   const selectedParts = multiPartActive
-    ? scanResult!.parts.filter((p) => selectedPartUrls.includes(p.url))
+    ? activeOrderedParts.filter((p) => selectedPartUrls.includes(p.url))
     : [];
 
   const torrentFiles = probe?.files ?? [];
@@ -479,7 +500,7 @@ export function AddDownloadModal({
         });
       }
 
-      if (multiPartActive && downloadAllParts && selectedParts.length > 1) {
+      if (multiPartActive && downloadAllParts && selectedParts.length >= 1) {
         await onConfirmBatch(
           selectedParts.map((part) => ({
             source: part.url,
@@ -489,6 +510,7 @@ export function AddDownloadModal({
             alwaysUseThisFolder: alwaysUseDir,
             requestHeaders,
             schedule,
+            priority: partPriorities[part.url] ?? 'normal',
           })),
           batchQueueMode
         );
@@ -666,6 +688,16 @@ export function AddDownloadModal({
               lang={settings.language}
               scanning={scanningParts}
               scanResult={scanResult}
+              orderedParts={activeOrderedParts}
+              onReorderParts={setOrderedParts}
+              partPriorities={partPriorities}
+              onPartPriorityChange={(url, priority) =>
+                setPartPriorities((prev) => ({ ...prev, [url]: priority }))
+              }
+              onResetOrder={() => {
+                if (scanResult) setOrderedParts(scanResult.parts);
+                setPartPriorities({});
+              }}
               selectedPartUrls={selectedPartUrls}
               onSelectedPartUrlsChange={setSelectedPartUrls}
               downloadAllParts={downloadAllParts}

@@ -9,6 +9,7 @@ import {
   normalizeDownloadSchedule,
   normalizeHexColor,
 } from '../shared/constants';
+import { normalizeDownloadPriority } from '../shared/selection';
 import type {
   AppSettings,
   CategoryDownloadDirs,
@@ -78,6 +79,7 @@ export function normalizeDownloadsOnLoad(
       status,
       errorMessage,
       schedule,
+      priority: normalizeDownloadPriority(item.priority),
       downloadSpeed: 0,
       uploadSpeed: 0,
       etaSeconds: null,

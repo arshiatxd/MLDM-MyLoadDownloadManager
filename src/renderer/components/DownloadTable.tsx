@@ -28,6 +28,7 @@ import {
   formatSpeed,
 } from '../../shared/constants';
 import { t } from '../../shared/i18n';
+import type { RowClickModifiers } from '../../shared/selection';
 import type { AppLanguage, CategoryId, DownloadItem, FileCategory } from '../../shared/types';
 
 interface DownloadTableProps {
@@ -37,8 +38,9 @@ interface DownloadTableProps {
   activeCategory: CategoryId;
   selectedIds: Set<string>;
   focusedId: string | null;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (id: string, shiftKey?: boolean) => void;
   onToggleSelectAll: () => void;
+  onRowClick: (id: string, modifiers: RowClickModifiers) => void;
   onFocusItem: (id: string) => void;
   onInspectItem: (id: string) => void;
   onShowPopup: (id: string) => void;
@@ -102,7 +104,8 @@ interface DownloadRowProps {
   index: number;
   isSelected: boolean;
   isFocused: boolean;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (id: string, shiftKey?: boolean) => void;
+  onRowClick: (id: string, modifiers: RowClickModifiers) => void;
   onFocusItem: (id: string) => void;
   onInspectItem: (id: string) => void;
   onPause: (id: string) => void;
@@ -119,6 +122,7 @@ const DownloadRow = memo(function DownloadRow({
   isSelected,
   isFocused,
   onToggleSelect,
+  onRowClick,
   onFocusItem,
   onInspectItem,
   onPause,
@@ -128,6 +132,7 @@ const DownloadRow = memo(function DownloadRow({
   onShowInFolder,
   onOpenContextMenu,
 }: DownloadRowProps) {
+  const checkboxShiftRef = useRef(false);
   const progress = getItemProgress(item);
   const pct = Math.round(progress * 100);
   const badge = getStatusBadge(item);
@@ -141,7 +146,17 @@ const DownloadRow = memo(function DownloadRow({
 
   return (
     <tr
-      onClick={() => onFocusItem(item.id)}
+      data-download-id={item.id}
+      onMouseDown={(e) => {
+        if (e.shiftKey) e.preventDefault();
+      }}
+      onClick={(e) =>
+        onRowClick(item.id, {
+          shiftKey: e.shiftKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+        })
+      }
       onDoubleClick={() => {
         if (item.status === 'completed') onOpenFile(item);
         else onInspectItem(item.id);
@@ -152,7 +167,7 @@ const DownloadRow = memo(function DownloadRow({
         onFocusItem(item.id);
         onOpenContextMenu(item, e.clientX, e.clientY);
       }}
-      className={`animate-row-enter group border-b border-[var(--border-subtle)]/70 transition-colors last:border-b-0 ${
+      className={`animate-row-enter group select-none border-b border-[var(--border-subtle)]/70 transition-colors last:border-b-0 ${
         isFocused || isSelected
           ? 'bg-[var(--bg-selected)]'
           : 'hover:bg-[var(--bg-hover)]/65'
@@ -167,7 +182,14 @@ const DownloadRow = memo(function DownloadRow({
         <input
           type="checkbox"
           checked={isSelected}
-          onChange={() => onToggleSelect(item.id)}
+          onMouseDown={(e) => {
+            checkboxShiftRef.current = e.shiftKey;
+          }}
+          onChange={() => {
+            const shift = checkboxShiftRef.current;
+            checkboxShiftRef.current = false;
+            onToggleSelect(item.id, shift);
+          }}
           aria-label={`Select ${item.name}`}
           className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
         />
@@ -181,8 +203,20 @@ const DownloadRow = memo(function DownloadRow({
         <div className="flex items-center gap-2.5">
           <CategoryGlyph category={item.category} kind={item.kind} />
           <div className="min-w-0 flex-1">
-            <div className="truncate font-medium text-[var(--text-primary)]" title={item.name}>
-              {item.name}
+            <div className="flex items-center gap-1.5">
+              <div className="truncate font-medium text-[var(--text-primary)]" title={item.name}>
+                {item.name}
+              </div>
+              {item.status !== 'completed' && item.priority === 'high' && (
+                <span className="shrink-0 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent-text)]">
+                  High
+                </span>
+              )}
+              {item.status !== 'completed' && item.priority === 'low' && (
+                <span className="shrink-0 rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                  Low
+                </span>
+              )}
             </div>
             {item.status === 'error' && item.errorMessage ? (
               <div className="truncate text-[12px] text-[var(--danger)]" title={item.errorMessage}>
@@ -355,6 +389,7 @@ export function DownloadTable({
   focusedId,
   onToggleSelect,
   onToggleSelectAll,
+  onRowClick,
   onFocusItem,
   onInspectItem,
   onShowPopup,
@@ -383,10 +418,22 @@ export function DownloadTable({
     }
     return 148;
   });
+  const tableScrollRef = useRef<HTMLDivElement>(null);
   const [isResizingDropzone, setIsResizingDropzone] = useState(false);
   const dropzoneDragRef = useRef<{ startY: number; startHeight: number; latestHeight: number } | null>(
     null
   );
+
+  useEffect(() => {
+    if (!focusedId || !tableScrollRef.current) return;
+    const rows = tableScrollRef.current.querySelectorAll<HTMLTableRowElement>('tr[data-download-id]');
+    for (const row of rows) {
+      if (row.dataset.downloadId === focusedId) {
+        row.scrollIntoView({ block: 'nearest' });
+        break;
+      }
+    }
+  }, [focusedId]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -434,6 +481,7 @@ export function DownloadTable({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--bg-canvas)] px-3 py-2">
       <div
+        ref={tableScrollRef}
         key={activeCategory}
         onScroll={() => {
           if (contextMenu) setContextMenu(null);
@@ -484,6 +532,7 @@ export function DownloadTable({
                 isSelected={selectedIds.has(item.id)}
                 isFocused={focusedId === item.id}
                 onToggleSelect={onToggleSelect}
+                onRowClick={onRowClick}
                 onFocusItem={onFocusItem}
                 onInspectItem={onInspectItem}
                 onPause={onPause}

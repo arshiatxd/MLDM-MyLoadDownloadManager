@@ -34,7 +34,9 @@ import type {
   DirectoryValidationResult,
   DownloadItem,
   DownloadKind,
+  DownloadPriority,
   FileCategory,
+  MultiPartCandidate,
   MultiPartScanResult,
   PopupSessionData,
   ProbeResult,
@@ -82,6 +84,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
 
   const [scanningParts, setScanningParts] = useState(false);
   const [scanResult, setScanResult] = useState<MultiPartScanResult | null>(null);
+  const [orderedParts, setOrderedParts] = useState<MultiPartCandidate[]>([]);
+  const [partPriorities, setPartPriorities] = useState<Record<string, DownloadPriority>>({});
   const [selectedPartUrls, setSelectedPartUrls] = useState<string[]>([]);
   const [downloadAllParts, setDownloadAllParts] = useState(true);
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>('parallel');
@@ -215,22 +219,34 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
           if (canceled) return;
           if (scan.matched && scan.parts.length > 1) {
             setScanResult(scan);
+            setOrderedParts(scan.parts);
+            setPartPriorities({});
             setSelectedPartUrls(scan.parts.map((p) => p.url));
             setDownloadAllParts(true);
           } else {
             setScanResult(null);
+            setOrderedParts([]);
+            setPartPriorities({});
             setSelectedPartUrls([]);
           }
         })
         .catch(() => {
           if (!canceled) {
             setScanResult(null);
+            setOrderedParts([]);
+            setPartPriorities({});
             setSelectedPartUrls([]);
           }
         })
         .finally(() => {
           if (!canceled) setScanningParts(false);
         });
+    } else {
+      setScanningParts(false);
+      setScanResult(null);
+      setOrderedParts([]);
+      setPartPriorities({});
+      setSelectedPartUrls([]);
     }
 
     return () => {
@@ -290,8 +306,9 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     settings.categoryDownloadDirs,
   ]);
 
+  const activeOrderedParts = orderedParts.length > 0 ? orderedParts : scanResult?.parts ?? [];
   const selectedParts = multiPartActive
-    ? scanResult!.parts.filter((p) => selectedPartUrls.includes(p.url))
+    ? activeOrderedParts.filter((p) => selectedPartUrls.includes(p.url))
     : [];
 
   const totalDisplayBytes =
@@ -439,7 +456,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         return;
       }
 
-      if (multiPartActive && downloadAllParts && selectedParts.length > 1) {
+      if (multiPartActive && downloadAllParts && selectedParts.length >= 1) {
         const created = await window.myload.addBatchDownloads(
           selectedParts.map((part) => ({
             source: part.url,
@@ -449,6 +466,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             alwaysUseThisFolder: alwaysUseDir,
             requestHeaders,
             schedule,
+            priority: partPriorities[part.url] ?? 'normal',
           })),
           batchQueueMode
         );
@@ -609,6 +627,16 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             lang={settings.language}
             scanning={scanningParts}
             scanResult={scanResult}
+            orderedParts={activeOrderedParts}
+            onReorderParts={setOrderedParts}
+            partPriorities={partPriorities}
+            onPartPriorityChange={(url, priority) =>
+              setPartPriorities((prev) => ({ ...prev, [url]: priority }))
+            }
+            onResetOrder={() => {
+              if (scanResult) setOrderedParts(scanResult.parts);
+              setPartPriorities({});
+            }}
             selectedPartUrls={selectedPartUrls}
             onSelectedPartUrlsChange={setSelectedPartUrls}
             downloadAllParts={downloadAllParts}

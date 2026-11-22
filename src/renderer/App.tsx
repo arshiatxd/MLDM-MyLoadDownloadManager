@@ -5,6 +5,12 @@ import {
   DEFAULT_FILTER_TAB_ORDER,
   extractMultipleSources,
 } from '../shared/constants';
+import {
+  computeArrowSelection,
+  computeCheckboxSelection,
+  computeRowClickSelection,
+  type RowClickModifiers,
+} from '../shared/selection';
 import type {
   AddDownloadRequest,
   AppSettings,
@@ -49,6 +55,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const selectionAnchorIdRef = useRef<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -157,6 +164,9 @@ export function App() {
       return filtered.size === prev.size ? prev : filtered;
     });
     setFocusedId((prev) => (prev && existing.has(prev) ? prev : null));
+    if (selectionAnchorIdRef.current && !existing.has(selectionAnchorIdRef.current)) {
+      selectionAnchorIdRef.current = null;
+    }
   }, [downloads]);
 
   const counts = useMemo(() => {
@@ -185,6 +195,46 @@ export function App() {
     if (!focusedId) return null;
     return downloads.find((d) => d.id === focusedId) ?? null;
   }, [downloads, focusedId]);
+
+  const handleRowSelect = useCallback(
+    (id: string, modifiers: RowClickModifiers) => {
+      const orderedIds = visibleDownloads.map((d) => d.id);
+      const next = computeRowClickSelection(
+        orderedIds,
+        id,
+        {
+          selectedIds,
+          focusedId,
+          anchorId: selectionAnchorIdRef.current,
+        },
+        modifiers
+      );
+      selectionAnchorIdRef.current = next.anchorId;
+      setSelectedIds(next.selectedIds);
+      setFocusedId(next.focusedId);
+    },
+    [visibleDownloads, selectedIds, focusedId]
+  );
+
+  const handleToggleSelect = useCallback(
+    (id: string, shiftKey = false) => {
+      const orderedIds = visibleDownloads.map((d) => d.id);
+      const next = computeCheckboxSelection(
+        orderedIds,
+        id,
+        {
+          selectedIds,
+          focusedId,
+          anchorId: selectionAnchorIdRef.current,
+        },
+        shiftKey
+      );
+      selectionAnchorIdRef.current = next.anchorId;
+      setSelectedIds(next.selectedIds);
+      setFocusedId(next.focusedId);
+    },
+    [visibleDownloads, selectedIds, focusedId]
+  );
 
   useEffect(() => {
     const present = new Set(downloads.map((d) => d.id));
@@ -362,7 +412,17 @@ export function App() {
         return;
       }
 
-      if (addModalOpen || settingsOpen || logsOpen || aboutOpen || privacyOpen || copyrightOpen || removeModal || showUpdatePrompt) {
+      if (
+        addModalOpen ||
+        settingsOpen ||
+        logsOpen ||
+        aboutOpen ||
+        privacyOpen ||
+        copyrightOpen ||
+        removeModal ||
+        scheduleModalItem ||
+        showUpdatePrompt
+      ) {
         return;
       }
 
@@ -373,7 +433,36 @@ export function App() {
       }
       if (e.ctrlKey && e.key.toLowerCase() === 'a' && !isTextInputFocused()) {
         e.preventDefault();
-        setSelectedIds(new Set(visibleDownloads.map((d) => d.id)));
+        const orderedIds = visibleDownloads.map((d) => d.id);
+        selectionAnchorIdRef.current = orderedIds[0] ?? null;
+        setSelectedIds(new Set(orderedIds));
+        return;
+      }
+      if (
+        (e.key === 'ArrowDown' || e.key === 'ArrowUp') &&
+        !e.defaultPrevented &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !isTextInputFocused() &&
+        document.activeElement?.getAttribute('role') !== 'separator' &&
+        visibleDownloads.length > 0
+      ) {
+        e.preventDefault();
+        const orderedIds = visibleDownloads.map((d) => d.id);
+        const next = computeArrowSelection(
+          orderedIds,
+          e.key === 'ArrowDown' ? 'down' : 'up',
+          {
+            selectedIds,
+            focusedId,
+            anchorId: selectionAnchorIdRef.current,
+          },
+          e.shiftKey
+        );
+        selectionAnchorIdRef.current = next.anchorId;
+        setSelectedIds(next.selectedIds);
+        setFocusedId(next.focusedId);
         return;
       }
       if (e.key === 'Delete' && !isTextInputFocused() && selectedItems.length > 0) {
@@ -411,15 +500,19 @@ export function App() {
     privacyOpen,
     copyrightOpen,
     removeModal,
+    scheduleModalItem,
     showUpdatePrompt,
     visibleDownloads,
+    selectedIds,
+    focusedId,
     selectedItems,
     focusedItem,
     handlePasteFromClipboard,
   ]);
 
   const isExternalDrop = (e: React.DragEvent) =>
-    !e.dataTransfer.types.includes('application/x-myload-tab');
+    !e.dataTransfer.types.includes('application/x-myload-tab') &&
+    !e.dataTransfer.types.includes('application/x-myload-multipart');
 
   const handleDragEnter = (e: React.DragEvent) => {
     if (!isExternalDrop(e)) return;
@@ -674,25 +767,25 @@ export function App() {
           activeCategory={activeCategory}
           selectedIds={selectedIds}
           focusedId={focusedId}
-          onToggleSelect={(id) => {
-            setSelectedIds((prev) => {
-              const next = new Set(prev);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            });
-          }}
+          onToggleSelect={handleToggleSelect}
           onToggleSelectAll={() => {
             const allSelected =
               visibleDownloads.length > 0 &&
               visibleDownloads.every((d) => selectedIds.has(d.id));
             if (allSelected) {
+              selectionAnchorIdRef.current = null;
               setSelectedIds(new Set());
             } else {
-              setSelectedIds(new Set(visibleDownloads.map((d) => d.id)));
+              const orderedIds = visibleDownloads.map((d) => d.id);
+              selectionAnchorIdRef.current = orderedIds[0] ?? null;
+              setSelectedIds(new Set(orderedIds));
             }
           }}
-          onFocusItem={(id) => setFocusedId(id)}
+          onRowClick={handleRowSelect}
+          onFocusItem={(id) => {
+            setFocusedId(id);
+            selectionAnchorIdRef.current = id;
+          }}
           onInspectItem={(id) => {
             setFocusedId(id);
             setInspectorOpen(true);

@@ -214,20 +214,42 @@ export function runProcess(
       }
     };
 
-    const killChild = () => {
+    const silenceStreams = () => {
       try {
-        child.kill('SIGTERM');
+        child.stdout.removeAllListeners('data');
+        child.stderr.removeAllListeners('data');
+        child.stdout.destroy();
+        child.stderr.destroy();
+      } catch {
+      }
+    };
+
+    const killChild = () => {
+      if (process.platform === 'win32' && typeof child.pid === 'number' && child.pid > 0) {
+        try {
+          const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+            shell: false,
+            windowsHide: true,
+            stdio: 'ignore',
+          });
+          killer.on('error', () => {});
+          killer.unref();
+        } catch {
+        }
+      }
+      try {
+        child.kill(process.platform === 'win32' ? undefined : 'SIGKILL');
       } catch {
       }
     };
 
     const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      silenceStreams();
       killChild();
-      if (!settled) {
-        settled = true;
-        cleanup();
-        reject(new Error('Download canceled'));
-      }
+      cleanup();
+      reject(new Error('Download canceled'));
     };
 
     if (opts?.signal) {
@@ -236,12 +258,12 @@ export function runProcess(
 
     if (opts?.timeoutMs && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        silenceStreams();
         killChild();
-        if (!settled) {
-          settled = true;
-          cleanup();
-          reject(new Error('Media operation timed out'));
-        }
+        cleanup();
+        reject(new Error('Media operation timed out'));
       }, opts.timeoutMs);
     }
 
@@ -263,12 +285,14 @@ export function runProcess(
     };
 
     child.stdout.on('data', (buf: Buffer) => {
+      if (settled || opts?.signal?.aborted) return;
       const text = buf.toString('utf-8');
       stdoutChunks.push(text);
       stdoutPending = flushLines(text, stdoutPending, opts?.onStdoutLine);
     });
 
     child.stderr.on('data', (buf: Buffer) => {
+      if (settled || opts?.signal?.aborted) return;
       const text = buf.toString('utf-8');
       stderrChunks.push(text);
       stderrPending = flushLines(text, stderrPending, opts?.onStderrLine);
@@ -282,9 +306,9 @@ export function runProcess(
     });
 
     child.on('close', (code) => {
+      if (settled || opts?.signal?.aborted) return;
       if (stdoutPending.trim()) opts?.onStdoutLine?.(stdoutPending.trim());
       if (stderrPending.trim()) opts?.onStderrLine?.(stderrPending.trim());
-      if (settled) return;
       settled = true;
       cleanup();
       resolve({

@@ -130,6 +130,8 @@ export class DownloadManager {
   private readonly pendingDuplicateChoices = new Map<string, 'auto-rename' | 'overwrite'>();
   private readonly equalBuckets = new Map<string, TokenBucket>();
   private readonly pendingMediaJobs = new Map<string, SocialDownloadRequest>();
+  private readonly activeMediaLimits = new Map<string, number | null>();
+  private mediaLimitRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: {
     stateFilePath: string;
@@ -436,6 +438,7 @@ export class DownloadManager {
       this.releaseEqualBucket(id);
     } else if (item.kind === 'media') {
       this.socialDownloader.cancel(id);
+      this.activeMediaLimits.delete(id);
     } else {
       await this.torrentEngine.pause(id);
     }
@@ -620,7 +623,9 @@ export class DownloadManager {
         this.releaseEqualBucket(id);
       } else if (item.kind === 'media') {
         this.socialDownloader.cancel(id);
+        this.socialDownloader.clearTarget(id);
         this.pendingMediaJobs.delete(id);
+        this.activeMediaLimits.delete(id);
       } else {
         await this.torrentEngine.remove(id, deleteFiles);
       }
@@ -674,9 +679,19 @@ export class DownloadManager {
     const prevWatch = this.settings.watchClipboard;
     const prevBridgeEnabled = this.settings.browserBridgeEnabled;
     const prevBridgePort = this.settings.browserBridgePort;
+    const throttleChanged =
+      this.settings.downloadSpeedLimitEnabled !== next.downloadSpeedLimitEnabled ||
+      this.settings.downloadSpeedLimitValue !== next.downloadSpeedLimitValue ||
+      this.settings.downloadSpeedLimitUnit !== next.downloadSpeedLimitUnit ||
+      this.settings.gamingModeEnabled !== next.gamingModeEnabled ||
+      this.settings.gamingModeProfile !== next.gamingModeProfile ||
+      this.settings.queueMode !== next.queueMode;
     this.settings = next;
 
     this.applyThrottleSettings();
+    if (throttleChanged) {
+      this.scheduleRunningMediaLimitSync();
+    }
     if (prevWatch !== next.watchClipboard) {
       this.syncClipboardWatcher();
     }
@@ -748,6 +763,7 @@ export class DownloadManager {
     if (this.statsTimer) clearInterval(this.statsTimer);
     if (this.clipboardTimer) clearInterval(this.clipboardTimer);
     if (this.scheduleTimer) clearInterval(this.scheduleTimer);
+    if (this.mediaLimitRestartTimer) clearTimeout(this.mediaLimitRestartTimer);
     if (this.emitTimer) clearTimeout(this.emitTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
 
@@ -868,6 +884,7 @@ export class DownloadManager {
     }
 
     if (item.kind === 'media') {
+      if (this.socialDownloader.isRunning(item.id)) return;
       const jobReq = this.pendingMediaJobs.get(item.id);
       if (!jobReq) {
         item.status = 'error';
@@ -876,17 +893,35 @@ export class DownloadManager {
         this.scheduleQueue();
         return;
       }
+      const limitRateBytesPerSec = this.getEffectiveMediaSpeedLimit();
+      this.activeMediaLimits.set(item.id, limitRateBytesPerSec);
+      item.resumeSupported = jobReq.platform !== 'spotify';
       item.status = 'probing';
       void this.socialDownloader.executeJob(item.id, jobReq, {
         saveDir: item.saveDir,
+        limitRateBytesPerSec,
         onProgress: (patch) => {
+          if (
+            !this.socialDownloader.isRunning(item.id) ||
+            (item.status !== 'downloading' && item.status !== 'probing')
+          ) {
+            return;
+          }
           Object.assign(item, patch);
           this.scheduleEmit();
           this.scheduleSave();
           this.syncPreventSleep();
         },
         onComplete: (finalPath, totalBytes, displayName) => {
+          if (
+            !this.socialDownloader.isRunning(item.id) ||
+            (item.status !== 'downloading' && item.status !== 'probing')
+          ) {
+            return;
+          }
           this.pendingMediaJobs.delete(item.id);
+          this.activeMediaLimits.delete(item.id);
+          this.socialDownloader.clearTarget(item.id);
           item.filePath = finalPath;
           item.name = displayName || path.basename(finalPath);
           item.category = classifyFileName(item.name, 'http');
@@ -899,6 +934,10 @@ export class DownloadManager {
           this.onItemFinished(item);
         },
         onError: (message) => {
+          this.activeMediaLimits.delete(item.id);
+          if (item.status !== 'downloading' && item.status !== 'probing') {
+            return;
+          }
           item.status = 'error';
           item.downloadSpeed = 0;
           item.etaSeconds = null;
@@ -981,6 +1020,63 @@ export class DownloadManager {
     this.callbacks.onSettingsUpdated?.({ ...this.settings });
     void this.store.save(this.downloads, this.settings);
     this.powerManager.startCountdown(action as Exclude<PowerAction, 'off'>, 60);
+  }
+
+  private getEffectiveMediaSpeedLimit(): number | null {
+    const userDl = speedToBytesPerSec(
+      this.settings.downloadSpeedLimitEnabled,
+      this.settings.downloadSpeedLimitValue,
+      this.settings.downloadSpeedLimitUnit
+    );
+    let limit = this.settings.gamingModeEnabled
+      ? (this.networkBalancer.getEffectiveLimits().downloadLimit ?? userDl)
+      : userDl;
+
+    if (this.settings.queueMode === 'parallel-equal') {
+      const activeItems = this.downloads.filter(
+        (d) => d.status === 'downloading' || d.status === 'probing'
+      );
+      if (activeItems.length >= 2 && limit !== null) {
+        limit = Math.max(32 * 1024, Math.floor(limit / activeItems.length));
+      }
+    }
+    return limit;
+  }
+
+  private scheduleRunningMediaLimitSync(): void {
+    if (this.mediaLimitRestartTimer) {
+      clearTimeout(this.mediaLimitRestartTimer);
+    }
+    this.mediaLimitRestartTimer = setTimeout(() => {
+      this.mediaLimitRestartTimer = null;
+      if (this.shuttingDown) return;
+      const nextLimit = this.getEffectiveMediaSpeedLimit();
+      for (const item of this.downloads) {
+        if (
+          item.kind !== 'media' ||
+          (item.status !== 'downloading' && item.status !== 'probing')
+        ) {
+          continue;
+        }
+        if (this.activeMediaLimits.get(item.id) === nextLimit) {
+          continue;
+        }
+        this.socialDownloader.cancel(item.id);
+        this.activeMediaLimits.delete(item.id);
+        const targetId = item.id;
+        setTimeout(() => {
+          if (this.shuttingDown) return;
+          const current = this.findItem(targetId);
+          if (
+            !current ||
+            (current.status !== 'downloading' && current.status !== 'probing')
+          ) {
+            return;
+          }
+          this.startItem(current);
+        }, 180);
+      }
+    }, 350);
   }
 
   private applyThrottleSettings(): void {
@@ -1077,6 +1173,7 @@ export class DownloadManager {
           this.releaseEqualBucket(other.id);
         } else if (other.kind === 'media') {
           this.socialDownloader.cancel(other.id);
+          this.activeMediaLimits.delete(other.id);
         } else {
           void this.torrentEngine.pause(other.id);
         }

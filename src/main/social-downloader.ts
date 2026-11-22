@@ -209,14 +209,93 @@ async function allocateUniqueDirPath(parentDir: string, folderName: string): Pro
   return candidate;
 }
 
+export function buildYtDlpArgs(params: {
+  req: SocialDownloadRequest;
+  outputTemplate: string;
+  ffmpegPath: string | null;
+  limitRateBytesPerSec?: number | null;
+  sourceUrl: string;
+}): string[] {
+  const { req, outputTemplate, ffmpegPath, limitRateBytesPerSec, sourceUrl } = params;
+  const format: MediaOutputFormat = req.format || 'mp4';
+  const isAudio = AUDIO_FORMATS.has(format);
+
+  const args: string[] = [
+    '--newline',
+    '--progress',
+    '--no-warnings',
+    '--no-playlist',
+    '--continue',
+    '--print',
+    'after_move:MYLOAD_FINAL:%(filepath)s',
+    '-o',
+    outputTemplate,
+  ];
+
+  if (
+    typeof limitRateBytesPerSec === 'number' &&
+    Number.isFinite(limitRateBytesPerSec) &&
+    limitRateBytesPerSec > 0
+  ) {
+    args.push('--limit-rate', String(Math.max(1024, Math.floor(limitRateBytesPerSec))));
+  }
+
+  if (ffmpegPath) {
+    args.push('--ffmpeg-location', path.dirname(ffmpegPath));
+  }
+
+  if (isAudio) {
+    args.push('-f', 'bestaudio/best', '-x', '--audio-format', format, '--add-metadata');
+    const aq =
+      req.quality === '320k'
+        ? '320K'
+        : req.quality === '192k'
+          ? '192K'
+          : req.quality === '128k'
+            ? '128K'
+            : '0';
+    args.push('--audio-quality', aq);
+    if (format !== 'wav' && ffmpegPath) {
+      args.push('--embed-thumbnail');
+    }
+  } else {
+    const h =
+      req.quality === '1080p'
+        ? 1080
+        : req.quality === '720p'
+          ? 720
+          : req.quality === '480p'
+            ? 480
+            : req.quality === '360p'
+              ? 360
+              : null;
+    const selector = h
+      ? `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`
+      : 'bestvideo+bestaudio/best';
+    args.push('-f', selector, '--merge-output-format', format);
+  }
+
+  args.push('--', sourceUrl);
+  return args;
+}
+
 export class SocialMediaDownloader {
   private readonly binDir: string;
   private readonly logger: LogManager;
   private readonly controllers = new Map<string, AbortController>();
+  private readonly activeTargets = new Map<string, string>();
 
   constructor(binDir: string, logger: LogManager) {
     this.binDir = binDir;
     this.logger = logger;
+  }
+
+  isRunning(id: string): boolean {
+    return this.controllers.has(id);
+  }
+
+  clearTarget(id: string): void {
+    this.activeTargets.delete(id);
   }
 
   cancel(id: string): void {
@@ -565,6 +644,7 @@ export class SocialMediaDownloader {
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
       onError: (message: string) => void;
@@ -578,7 +658,7 @@ export class SocialMediaDownloader {
       if (req.platform === 'spotify') {
         await this.executeSpotifyJob(id, req, opts, controller.signal);
       } else {
-        await this.executeYtDlpJob(req, opts, controller.signal);
+        await this.executeYtDlpJob(id, req, opts, controller.signal);
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -586,14 +666,18 @@ export class SocialMediaDownloader {
       this.logger.error('Media', msg, id);
       opts.onError(msg);
     } finally {
-      this.controllers.delete(id);
+      if (this.controllers.get(id) === controller) {
+        this.controllers.delete(id);
+      }
     }
   }
 
   private async executeYtDlpJob(
+    id: string,
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
     },
@@ -602,8 +686,11 @@ export class SocialMediaDownloader {
     const format: MediaOutputFormat = req.format || 'mp4';
     const isAudio = AUDIO_FORMATS.has(format);
     const ytDlp = await ensureYtDlp(this.binDir, () => {
-      opts.onProgress({ status: 'probing' });
+      if (!signal.aborted) {
+        opts.onProgress({ status: 'probing' });
+      }
     });
+    if (signal.aborted) throw new Error('Download canceled');
     const ffmpeg = findFfmpeg(this.binDir);
 
     if (isAudio && !ffmpeg) {
@@ -617,61 +704,26 @@ export class SocialMediaDownloader {
           customName.toLowerCase().endsWith(`.${format}`) ? customName : `${customName}.${format}`
         )
       : `${sanitizeFileName(selected?.title || req.title || 'media')}.${format}`;
-    const uniqueTarget = await allocateUniqueFilePath(opts.saveDir, desiredName);
+    const existingTarget = this.activeTargets.get(id);
+    const uniqueTarget =
+      existingTarget || (await allocateUniqueFilePath(opts.saveDir, desiredName));
+    this.activeTargets.set(id, uniqueTarget);
+
     const outDir = path.dirname(uniqueTarget);
     const outStem = path.basename(uniqueTarget, path.extname(uniqueTarget));
     const outputTemplate = path.join(outDir, `${outStem}.%(ext)s`);
 
-    const args: string[] = [
-      '--newline',
-      '--progress',
-      '--no-warnings',
-      '--no-playlist',
-      '--print',
-      'after_move:MYLOAD_FINAL:%(filepath)s',
-      '-o',
+    const args = buildYtDlpArgs({
+      req,
       outputTemplate,
-    ];
-
-    if (ffmpeg) {
-      args.push('--ffmpeg-location', path.dirname(ffmpeg));
-    }
-
-    if (isAudio) {
-      args.push('-f', 'bestaudio/best', '-x', '--audio-format', format, '--add-metadata');
-      const aq =
-        req.quality === '320k'
-          ? '320K'
-          : req.quality === '192k'
-            ? '192K'
-            : req.quality === '128k'
-              ? '128K'
-              : '0';
-      args.push('--audio-quality', aq);
-      if (format !== 'wav' && ffmpeg) {
-        args.push('--embed-thumbnail');
-      }
-    } else {
-      const h =
-        req.quality === '1080p'
-          ? 1080
-          : req.quality === '720p'
-            ? 720
-            : req.quality === '480p'
-              ? 480
-              : req.quality === '360p'
-                ? 360
-                : null;
-      const selector = h
-        ? `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`
-        : 'bestvideo+bestaudio/best';
-      args.push('-f', selector, '--merge-output-format', format);
-    }
-
-    args.push('--', selected?.sourceUrl || req.url);
+      ffmpegPath: ffmpeg,
+      limitRateBytesPerSec: opts.limitRateBytesPerSec,
+      sourceUrl: selected?.sourceUrl || req.url,
+    });
 
     let printedFilePath = '';
     const onLine = (line: string) => {
+      if (signal.aborted) return;
       if (line.startsWith('MYLOAD_FINAL:')) {
         printedFilePath = line.slice('MYLOAD_FINAL:'.length).trim();
         return;
@@ -695,6 +747,7 @@ export class SocialMediaDownloader {
       }
     };
 
+    if (signal.aborted) throw new Error('Download canceled');
     opts.onProgress({ status: 'downloading' });
     const res = await runProcess(ytDlp, args, {
       signal,
@@ -702,6 +755,8 @@ export class SocialMediaDownloader {
       onStdoutLine: onLine,
       onStderrLine: onLine,
     });
+
+    if (signal.aborted) throw new Error('Download canceled');
 
     if (res.code !== 0) {
       const priv = detectPrivateError(req.platform, `${res.stderr}\n${res.stdout}`);
@@ -724,6 +779,7 @@ export class SocialMediaDownloader {
     }
 
     const st = await fs.promises.stat(finalPath);
+    this.activeTargets.delete(id);
     opts.onComplete(finalPath, st.size, path.basename(finalPath));
   }
 
@@ -732,6 +788,7 @@ export class SocialMediaDownloader {
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
     },
@@ -801,20 +858,23 @@ export class SocialMediaDownloader {
         ];
         let downloadedRawPath = '';
         for (const query of queries) {
-          const dlRes = await runProcess(
-            ytDlp,
-            [
-              '-f',
-              'bestaudio/best',
-              '--no-warnings',
-              '--no-playlist',
-              '-o',
-              rawPattern,
-              '--',
-              query,
-            ],
-            { signal, timeoutMs: 120000 }
-          );
+          const spArgs = [
+            '-f',
+            'bestaudio/best',
+            '--no-warnings',
+            '--no-playlist',
+            '--continue',
+            ...(typeof opts.limitRateBytesPerSec === 'number' &&
+            Number.isFinite(opts.limitRateBytesPerSec) &&
+            opts.limitRateBytesPerSec > 0
+              ? ['--limit-rate', String(Math.max(1024, Math.floor(opts.limitRateBytesPerSec)))]
+              : []),
+            '-o',
+            rawPattern,
+            '--',
+            query,
+          ];
+          const dlRes = await runProcess(ytDlp, spArgs, { signal, timeoutMs: 120000 });
           if (dlRes.code === 0) {
             const stageFiles = await fs.promises.readdir(stageDir);
             const found = stageFiles.find(

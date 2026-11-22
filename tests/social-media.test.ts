@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserBridgeServer } from '../src/main/bridge';
 import { DownloadManager } from '../src/main/download-manager';
 import { LogManager } from '../src/main/logger';
+import { runProcess } from '../src/main/media-tools';
+import { SocialMediaDownloader, buildYtDlpArgs } from '../src/main/social-downloader';
 import {
   describeCustomHttpError,
   detectPrivateError,
@@ -635,6 +637,208 @@ describe('DownloadManager social media confirmation workflow', () => {
       saveDir: customDir,
       filePath: path.join(customDir, 'Custom Video.mp4'),
     });
+  });
+
+  it('builds yt-dlp args with --continue and optional --limit-rate', () => {
+    const req: SocialDownloadRequest = {
+      platform: 'youtube',
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: 'Sample',
+      format: 'mp4',
+      quality: '1080p',
+      items: [
+        {
+          id: 'v1',
+          index: 0,
+          kind: 'video',
+          title: 'Sample',
+          sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          ext: 'mp4',
+        },
+      ],
+    };
+
+    const capped = buildYtDlpArgs({
+      req,
+      outputTemplate: 'C:\\Downloads\\Sample.%(ext)s',
+      ffmpegPath: null,
+      limitRateBytesPerSec: 1048576,
+      sourceUrl: req.url,
+    });
+    expect(capped).toContain('--continue');
+    const rateIdx = capped.indexOf('--limit-rate');
+    expect(rateIdx).toBeGreaterThan(-1);
+    expect(capped[rateIdx + 1]).toBe('1048576');
+
+    const uncapped = buildYtDlpArgs({
+      req,
+      outputTemplate: 'C:\\Downloads\\Sample.%(ext)s',
+      ffmpegPath: null,
+      limitRateBytesPerSec: null,
+      sourceUrl: req.url,
+    });
+    expect(uncapped).toContain('--continue');
+    expect(uncapped).not.toContain('--limit-rate');
+  });
+
+  it('terminates spawned parent and grandchild processes cleanly on abort with zero late stdout callbacks', async () => {
+    const controller = new AbortController();
+    let grandchildPid = 0;
+    let linesBeforeAbort = 0;
+    let linesAfterAbort = 0;
+    let aborted = false;
+
+    const childScript =
+      'const { spawn } = require("node:child_process"); ' +
+      'const gc = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); ' +
+      'console.log("CHILD_PID=" + gc.pid); ' +
+      'setInterval(() => console.log("TICK"), 30);';
+
+    const procPromise = runProcess(process.execPath, ['-e', childScript], {
+      signal: controller.signal,
+      timeoutMs: 10000,
+      onStdoutLine: (line) => {
+        if (aborted) {
+          linesAfterAbort += 1;
+          return;
+        }
+        linesBeforeAbort += 1;
+        const m = /^CHILD_PID=(\d+)$/.exec(line);
+        if (m) {
+          grandchildPid = Number(m[1]);
+        }
+      },
+    });
+
+    const waitStart = Date.now();
+    while (!grandchildPid && Date.now() - waitStart < 4000) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(grandchildPid).toBeGreaterThan(0);
+    expect(linesBeforeAbort).toBeGreaterThan(0);
+
+    aborted = true;
+    controller.abort();
+    await expect(procPromise).rejects.toThrow(/canceled/i);
+
+    await new Promise((r) => setTimeout(r, 250));
+    expect(linesAfterAbort).toBe(0);
+
+    const isPidAlive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const killDeadline = Date.now() + 3000;
+    while (isPidAlive(grandchildPid) && Date.now() < killDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const stillAlive = isPidAlive(grandchildPid);
+    if (stillAlive) {
+      try {
+        process.kill(grandchildPid, 'SIGKILL');
+      } catch {
+      }
+    }
+    expect(stillAlive).toBe(false);
+  });
+
+  it('keeps media download paused on manual pause and scheduled stop even if stale progress events arrive', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'myload-media-pause-'));
+    tempDirs.push(tmpDir);
+    const saveDir = path.join(tmpDir, 'Downloads');
+    await fs.mkdir(saveDir, { recursive: true });
+
+    const lateProgressTriggers: Array<() => void> = [];
+    const seenLimits: Array<number | null | undefined> = [];
+    const execSpy = vi
+      .spyOn(SocialMediaDownloader.prototype, 'executeJob')
+      .mockImplementation(async function (this: SocialMediaDownloader, id, _req, opts) {
+        const ctrl = new AbortController();
+        const ctrlMap = (this as unknown as { controllers: Map<string, AbortController> })
+          .controllers;
+        ctrlMap.set(id, ctrl);
+        seenLimits.push(opts.limitRateBytesPerSec);
+        opts.onProgress({
+          status: 'downloading',
+          totalBytes: 10000,
+          downloadedBytes: 2500,
+          downloadSpeed: 5000000,
+        });
+        lateProgressTriggers.push(() => {
+          opts.onProgress({
+            status: 'downloading',
+            downloadedBytes: 4000,
+            downloadSpeed: 8000000,
+          });
+        });
+      });
+
+    try {
+      const manager = new DownloadManager({
+        stateFilePath: path.join(tmpDir, 'state.json'),
+        logFilePath: null,
+        defaultDownloadDir: saveDir,
+        appVersion: '1.0.1',
+        enableBridge: false,
+        powerAdapter: {
+          startSleepBlocker: () => 1,
+          stopSleepBlocker: () => undefined,
+          executeSystemAction: async () => undefined,
+        },
+      });
+      managers.push(manager);
+      manager.start();
+      manager.updateSettings({
+        downloadSpeedLimitEnabled: true,
+        downloadSpeedLimitValue: 2,
+        downloadSpeedLimitUnit: 'MB/s',
+      });
+
+      const stopAt = Date.now() + 60_000;
+      const [item] = await manager.addSocialDownload({
+        platform: 'youtube',
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        title: 'Clip',
+        format: 'mp4',
+        quality: '1080p',
+        schedule: { stopAt },
+        items: [
+          {
+            id: 'yt-1',
+            index: 0,
+            kind: 'video',
+            title: 'Clip',
+            sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            ext: 'mp4',
+          },
+        ],
+      });
+
+      await new Promise((r) => setTimeout(r, 30));
+      expect(seenLimits[0]).toBe(2 * 1024 * 1024);
+      expect(manager.getSnapshot().downloads[0].status).toBe('downloading');
+
+      await manager.pauseDownload(item.id);
+      lateProgressTriggers[0]?.();
+      expect(manager.getSnapshot().downloads[0].status).toBe('paused');
+      expect(manager.getSnapshot().downloads[0].downloadSpeed).toBe(0);
+
+      await manager.resumeDownload(item.id);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(manager.getSnapshot().downloads[0].status).toBe('downloading');
+
+      await manager.processSchedules(stopAt + 50);
+      lateProgressTriggers[1]?.();
+      expect(manager.getSnapshot().downloads[0].status).toBe('paused');
+      expect(manager.getSnapshot().downloads[0].downloadSpeed).toBe(0);
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 });
 

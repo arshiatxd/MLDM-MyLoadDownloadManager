@@ -57,8 +57,14 @@ export function normalizeDownloadsOnLoad(
     }));
 
     let status = item.status;
+    let errorMessage = item.errorMessage;
     if (status === 'downloading' || status === 'probing' || status === 'queued') {
-      status = autoResumeOnStart ? 'queued' : 'paused';
+      if (item.kind === 'media') {
+        status = 'error';
+        errorMessage = 'Interrupted when app closed — start again from the browser extension';
+      } else {
+        status = autoResumeOnStart ? 'queued' : 'paused';
+      }
     } else if (status === 'seeding') {
       status = keepSeedingAfterComplete ? (autoResumeOnStart ? 'seeding' : 'paused') : 'completed';
     }
@@ -66,6 +72,7 @@ export function normalizeDownloadsOnLoad(
     return {
       ...item,
       status,
+      errorMessage,
       downloadSpeed: 0,
       uploadSpeed: 0,
       etaSeconds: null,

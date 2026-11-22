@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyLoad Download Manager — Browser Integration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automatically send browser downloads and magnet links to MyLoad Download Manager.",
   "homepage_url": "https://github.com/arshiatxd/MLDM-MyLoadDownloadManager",
   "permissions": [

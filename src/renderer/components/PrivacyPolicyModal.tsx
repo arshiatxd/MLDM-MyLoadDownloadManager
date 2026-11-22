@@ -77,7 +77,9 @@ export function PrivacyPolicyModal({ open, onClose }: PrivacyPolicyModalProps) {
               your machine&apos;s local loopback address (<code className="text-[var(--text-primary)]">127.0.0.1</code>)
               using extension-origin verification. For authenticated downloads, site cookies and referrer
               headers are held strictly in memory for the active transfer, automatically stripped on
-              cross-host redirects, never logged, and never written to disk.
+              cross-host redirects, never logged, and never written to disk. Extension media tabs
+              (YouTube, Instagram, TikTok, Spotify) scan only public URLs you explicitly submit and
+              never bypass private accounts or login walls.
             </p>
           </section>
 

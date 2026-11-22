@@ -31,10 +31,10 @@ export function useDownloadsState(handlers: {
   const [stats, setStats] = useState<GlobalStats>(INITIAL_STATS);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [countdown, setCountdown] = useState<ShutdownCountdownState | null>(null);
-  const [appVersion, setAppVersion] = useState('1.0.0');
+  const [appVersion, setAppVersion] = useState('1.0.1');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     state: 'idle',
-    currentVersion: '1.0.0',
+    currentVersion: '1.0.1',
   });
   const [ready, setReady] = useState(false);
 
@@ -46,7 +46,7 @@ export function useDownloadsState(handlers: {
 
     void window.myload.getInitialState().then((snapshot) => {
       if (!mounted) return;
-      const ver = snapshot.appVersion || '1.0.0';
+      const ver = snapshot.appVersion || '1.0.1';
       setAppVersion(ver);
       setUpdateStatus((prev) => ({ ...prev, currentVersion: ver }));
       setDownloads(snapshot.downloads);

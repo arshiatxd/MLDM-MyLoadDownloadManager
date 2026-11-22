@@ -31,6 +31,7 @@ import type {
   ProbeResult,
   QueueMode,
   ShutdownCountdownState,
+  SocialDownloadRequest,
   TorrentFileInfo,
 } from '../shared/types';
 import { BrowserBridgeServer } from './bridge';
@@ -41,6 +42,11 @@ import { scanMultiParts } from './multipart-scanner';
 import { NetworkBalancer } from './network-balancer';
 import { PowerManager, type PowerPlatformAdapter } from './power';
 import { isPathInsideDir, redactSensitiveUrl } from './security';
+import {
+  SocialMediaDownloader,
+  deriveSocialPrimaryItemName,
+  isDirectHttpSlide,
+} from './social-downloader';
 import { StateStore, normalizeFilterTabOrder } from './store';
 import { TokenBucket } from './throttle';
 import {
@@ -71,6 +77,7 @@ export class DownloadManager {
   private readonly dlThrottle: TokenBucket;
   private readonly httpEngine: HttpDownloadEngine;
   private readonly torrentEngine: TorrentDownloadEngine;
+  private readonly socialDownloader: SocialMediaDownloader;
   private readonly powerManager: PowerManager;
   private readonly networkBalancer: NetworkBalancer;
   private readonly bridge: BrowserBridgeServer;
@@ -94,6 +101,7 @@ export class DownloadManager {
   private shuttingDown = false;
   private readonly pendingDuplicateChoices = new Map<string, 'auto-rename' | 'overwrite'>();
   private readonly equalBuckets = new Map<string, TokenBucket>();
+  private readonly pendingMediaJobs = new Map<string, SocialDownloadRequest>();
 
   constructor(opts: {
     stateFilePath: string;
@@ -107,7 +115,7 @@ export class DownloadManager {
     this.defaultDownloadDir = opts.defaultDownloadDir;
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.0';
+    this.appVersion = opts.appVersion ?? '1.0.1';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
@@ -115,6 +123,10 @@ export class DownloadManager {
     this.dlThrottle = new TokenBucket(null);
     this.httpEngine = new HttpDownloadEngine(this.dlThrottle, this.logger);
     this.torrentEngine = new TorrentDownloadEngine(this.logger);
+    this.socialDownloader = new SocialMediaDownloader(
+      path.join(path.dirname(opts.stateFilePath), 'bin'),
+      this.logger
+    );
     this.powerManager = new PowerManager(opts.powerAdapter, {
       onCountdownUpdate: (state) => {
         this.callbacks.onPowerCountdown?.(state);
@@ -142,6 +154,8 @@ export class DownloadManager {
         this.callbacks.onFocusRequested?.();
       },
       onIntercept: (payload) => this.handleBrowserIntercept(payload),
+      onMediaScan: (platform, url) => this.socialDownloader.scan(platform, url),
+      onMediaDownload: (req) => this.enqueueSocialDownload(req),
     });
 
     const loaded = this.store.load();
@@ -377,6 +391,8 @@ export class DownloadManager {
     if (item.kind === 'http') {
       this.httpEngine.pause(id);
       this.releaseEqualBucket(id);
+    } else if (item.kind === 'media') {
+      this.socialDownloader.cancel(id);
     } else {
       await this.torrentEngine.pause(id);
     }
@@ -461,6 +477,9 @@ export class DownloadManager {
       if (item.kind === 'http') {
         this.httpEngine.cancel(id);
         this.releaseEqualBucket(id);
+      } else if (item.kind === 'media') {
+        this.socialDownloader.cancel(id);
+        this.pendingMediaJobs.delete(id);
       } else {
         await this.torrentEngine.remove(id, deleteFiles);
       }
@@ -595,6 +614,7 @@ export class DownloadManager {
         this.httpEngine.pause(item.id);
       }
     }
+    this.socialDownloader.cancelAll();
 
     this.dlThrottle.dispose();
     for (const bucket of this.equalBuckets.values()) {
@@ -691,6 +711,52 @@ export class DownloadManager {
         },
         onError: (message) => {
           this.releaseEqualBucket(item.id);
+          item.status = 'error';
+          item.downloadSpeed = 0;
+          item.etaSeconds = null;
+          item.errorMessage = message;
+          this.handleCriticalStorageError(item, message);
+          this.emitAndSaveImmediate();
+          this.scheduleQueue();
+          this.applyThrottleSettings();
+          this.broadcastStats();
+        },
+      });
+      return;
+    }
+
+    if (item.kind === 'media') {
+      const jobReq = this.pendingMediaJobs.get(item.id);
+      if (!jobReq) {
+        item.status = 'error';
+        item.errorMessage = 'Media job data unavailable — please re-add from extension';
+        this.emitAndSaveImmediate();
+        this.scheduleQueue();
+        return;
+      }
+      item.status = 'probing';
+      void this.socialDownloader.executeJob(item.id, jobReq, {
+        saveDir: item.saveDir,
+        onProgress: (patch) => {
+          Object.assign(item, patch);
+          this.scheduleEmit();
+          this.scheduleSave();
+          this.syncPreventSleep();
+        },
+        onComplete: (finalPath, totalBytes, displayName) => {
+          this.pendingMediaJobs.delete(item.id);
+          item.filePath = finalPath;
+          item.name = displayName || path.basename(finalPath);
+          item.category = classifyFileName(item.name, 'http');
+          item.totalBytes = totalBytes;
+          item.downloadedBytes = totalBytes;
+          item.downloadSpeed = 0;
+          item.etaSeconds = 0;
+          item.status = 'completed';
+          item.completedAt = Date.now();
+          this.onItemFinished(item);
+        },
+        onError: (message) => {
           item.status = 'error';
           item.downloadSpeed = 0;
           item.etaSeconds = null;
@@ -867,6 +933,8 @@ export class DownloadManager {
         if (other.kind === 'http') {
           this.httpEngine.pause(other.id);
           this.releaseEqualBucket(other.id);
+        } else if (other.kind === 'media') {
+          this.socialDownloader.cancel(other.id);
         } else {
           void this.torrentEngine.pause(other.id);
         }
@@ -901,6 +969,94 @@ export class DownloadManager {
     if (!bucket) return;
     this.equalBuckets.delete(id);
     bucket.dispose();
+  }
+
+  private async enqueueSocialDownload(
+    req: SocialDownloadRequest
+  ): Promise<{ ok: boolean; count: number; error?: string }> {
+    try {
+      let count = 0;
+
+      if (req.platform === 'instagram' || req.platform === 'tiktok') {
+        const directSlides = req.items.filter((item) => isDirectHttpSlide(req, item));
+        const toolItems = req.items.filter((item) => !isDirectHttpSlide(req, item));
+        const referer =
+          req.platform === 'instagram'
+            ? 'https://www.instagram.com/'
+            : 'https://www.tiktok.com/';
+
+        for (const slide of directSlides) {
+          const ext = slide.ext || (slide.kind === 'image' ? 'jpg' : 'mp4');
+          const baseName = sanitizeFileName(`${slide.title || req.title || 'slide'}.${ext}`);
+          await this.addDownload({
+            source: slide.mediaUrl!,
+            kind: 'http',
+            saveDir: '',
+            fileName: baseName,
+            requestHeaders: { Referer: referer },
+          });
+          count += 1;
+        }
+
+        for (const item of toolItems) {
+          await this.enqueueSingleMediaJob({
+            ...req,
+            title: item.title || req.title,
+            items: [item],
+          });
+          count += 1;
+        }
+
+        return { ok: count > 0, count };
+      }
+
+      await this.enqueueSingleMediaJob(req);
+      count = 1;
+      return { ok: true, count };
+    } catch (err) {
+      return {
+        ok: false,
+        count: 0,
+        error: err instanceof Error ? err.message : 'Unable to queue media download',
+      };
+    }
+  }
+
+  private async enqueueSingleMediaJob(req: SocialDownloadRequest): Promise<DownloadItem> {
+    const displayName = deriveSocialPrimaryItemName(req);
+    const targetSaveDir = resolveSaveDirForFile(this.settings, displayName, 'http');
+    const dirCheck = await validateSaveDirectory(targetSaveDir, null);
+    if (!dirCheck.valid) {
+      throw new Error(dirCheck.error || 'Invalid download folder');
+    }
+
+    const item: DownloadItem = {
+      id: crypto.randomUUID(),
+      kind: 'media',
+      source: req.url,
+      name: displayName,
+      saveDir: dirCheck.normalizedPath,
+      filePath: path.join(dirCheck.normalizedPath, sanitizeFileName(displayName)),
+      category: classifyFileName(displayName, 'http'),
+      status: 'queued',
+      totalBytes: null,
+      downloadedBytes: 0,
+      uploadedBytes: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      etaSeconds: null,
+      resumeSupported: false,
+      segments: [],
+      addedAt: Date.now(),
+      retryCount: 0,
+    };
+
+    this.pendingMediaJobs.set(item.id, req);
+    this.downloads.unshift(item);
+    this.logger.info('Media', `Queued ${req.platform} media: ${item.name}`, item.id);
+    this.emitAndSaveImmediate();
+    this.scheduleQueue();
+    return item;
   }
 
   private async syncBridge(): Promise<void> {

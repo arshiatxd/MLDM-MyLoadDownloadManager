@@ -8,6 +8,18 @@
   </head>
   <body>
     <main class="popup">
+      <svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="ig-brand-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#feda75" />
+            <stop offset="25%" stop-color="#fa7e1e" />
+            <stop offset="50%" stop-color="#d62976" />
+            <stop offset="75%" stop-color="#962fbf" />
+            <stop offset="100%" stop-color="#4f5bd5" />
+          </linearGradient>
+        </defs>
+      </svg>
+
       <header class="header">
         <div class="brand">
           <img src="icons/icon32.png" alt="MyLoad Download Manager" width="22" height="22" />
@@ -16,45 +28,155 @@
         <span id="status-pill" class="pill pill-muted">Checking...</span>
       </header>
 
-      <section class="card">
-        <label class="toggle-row">
-          <div>
-            <div class="toggle-title">Auto-intercept downloads</div>
-            <div class="toggle-sub">Catch browser clicks in MyLoad automatically</div>
-          </div>
-          <input id="enabled-toggle" type="checkbox" />
-        </label>
-      </section>
+      <nav class="tab-bar" role="tablist" aria-label="Extension sections">
+        <button type="button" class="tab-btn active" data-tab="home" role="tab" aria-selected="true">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5.5v-6h-5v6H4a1 1 0 0 1-1-1v-9.5Z" fill="currentColor" />
+          </svg>
+          <span class="tab-label">Home</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="youtube" role="tab" aria-selected="false">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect class="yt-bg" x="1.5" y="4.5" width="21" height="15" rx="4.2" fill="#FF0000" />
+            <path class="yt-play" d="M10 8.8v6.4l5.6-3.2L10 8.8Z" fill="#FFFFFF" />
+          </svg>
+          <span class="tab-label">YouTube</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="instagram" role="tab" aria-selected="false">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#ig-brand-grad)" />
+            <rect x="6" y="6" width="12" height="12" rx="3.6" fill="none" stroke="#FFFFFF" stroke-width="1.8" />
+            <circle cx="12" cy="12" r="3.1" fill="none" stroke="#FFFFFF" stroke-width="1.8" />
+            <circle cx="15.8" cy="8.2" r="1.1" fill="#FFFFFF" />
+          </svg>
+          <span class="tab-label">Instagram</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="tiktok" role="tab" aria-selected="false">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#121215" />
+            <path transform="scale(0.84) translate(2.2 2.2) translate(-0.8 -0.6)" d="M15.5 3.5h-2.6v12a2.1 2.1 0 1 1-2.1-2.1v-2.6A4.7 4.7 0 1 0 15.5 15.5V9.1c1.1.85 2.45 1.35 3.9 1.4V7.9c-2.05-.15-3.65-1.7-3.9-4.4Z" fill="#25F4EE" />
+            <path transform="scale(0.84) translate(2.2 2.2) translate(0.8 0.6)" d="M15.5 3.5h-2.6v12a2.1 2.1 0 1 1-2.1-2.1v-2.6A4.7 4.7 0 1 0 15.5 15.5V9.1c1.1.85 2.45 1.35 3.9 1.4V7.9c-2.05-.15-3.65-1.7-3.9-4.4Z" fill="#FE2C55" />
+            <path transform="scale(0.84) translate(2.2 2.2)" d="M15.5 3.5h-2.6v12a2.1 2.1 0 1 1-2.1-2.1v-2.6A4.7 4.7 0 1 0 15.5 15.5V9.1c1.1.85 2.45 1.35 3.9 1.4V7.9c-2.05-.15-3.65-1.7-3.9-4.4Z" fill="#FFFFFF" />
+          </svg>
+          <span class="tab-label">TikTok</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="spotify" role="tab" aria-selected="false">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="10.5" fill="#1DB954" />
+            <path d="M7.2 9.4c3.4-1 7.2-.7 10.1.9M7.9 12.6c2.8-.8 6-.5 8.4.8M8.7 15.6c2.2-.6 4.7-.4 6.7.6" fill="none" stroke="#121215" stroke-width="1.9" stroke-linecap="round" />
+          </svg>
+          <span class="tab-label">Spotify</span>
+        </button>
+      </nav>
 
-      <div class="actions">
-        <button id="focus-btn" type="button" class="btn-primary">Open MyLoad</button>
-        <button id="refresh-btn" type="button" class="btn-secondary">Retry</button>
+      <div id="panel-home" class="panel">
+        <section class="card">
+          <label class="toggle-row">
+            <div>
+              <div class="toggle-title">Auto-intercept downloads</div>
+              <div class="toggle-sub">Catch browser clicks in MyLoad automatically</div>
+            </div>
+            <input id="enabled-toggle" type="checkbox" />
+          </label>
+        </section>
+
+        <div class="actions">
+          <button id="focus-btn" type="button" class="btn-primary">Open MyLoad</button>
+          <button id="refresh-btn" type="button" class="btn-secondary">Retry</button>
+        </div>
+
+        <section class="settings-section">
+          <h2>Bridge Settings</h2>
+
+          <label class="field">
+            <span>Minimum file size to intercept (KB, 0 = all)</span>
+            <input id="min-size-input" type="number" min="0" step="1" />
+          </label>
+
+          <label class="field">
+            <span>Excluded domains (one per line)</span>
+            <textarea
+              id="excluded-domains-input"
+              rows="3"
+              placeholder="example.com&#10;intranet.local"
+            ></textarea>
+          </label>
+
+          <label class="field">
+            <span>Local bridge port</span>
+            <input id="port-input" type="number" min="1024" max="65535" />
+          </label>
+
+          <div id="save-hint" class="save-hint" aria-live="polite"></div>
+        </section>
       </div>
 
-      <section class="settings-section">
-        <h2>Bridge Settings</h2>
+      <div id="panel-media" class="panel hidden">
+        <section class="card media-banner">
+          <div class="media-banner-title" id="media-platform-title">
+            <span id="media-platform-icon" class="media-banner-icon" aria-hidden="true"></span>
+            <span id="media-platform-title-text">YouTube</span>
+          </div>
+          <div class="media-banner-sub" id="media-platform-hint"></div>
+        </section>
 
-        <label class="field">
-          <span>Minimum file size to intercept (KB, 0 = all)</span>
-          <input id="min-size-input" type="number" min="0" step="1" />
-        </label>
+        <div class="url-row">
+          <input
+            id="media-url-input"
+            type="url"
+            class="url-input"
+            placeholder="Paste link here..."
+            aria-label="Media link"
+          />
+          <button id="use-tab-btn" type="button" class="btn-secondary" title="Fill from active tab">Tab</button>
+          <button id="scan-btn" type="button" class="btn-primary scan-btn">Scan</button>
+        </div>
 
-        <label class="field">
-          <span>Excluded domains (one per line)</span>
-          <textarea
-            id="excluded-domains-input"
-            rows="3"
-            placeholder="example.com&#10;intranet.local"
-          ></textarea>
-        </label>
+        <div id="media-loading" class="notice notice-muted hidden">Scanning link...</div>
+        <div id="media-error" class="notice notice-error hidden" role="alert"></div>
+        <div id="media-feedback" class="notice notice-ok hidden" aria-live="polite"></div>
 
-        <label class="field">
-          <span>Local bridge port</span>
-          <input id="port-input" type="number" min="1024" max="65535" />
-        </label>
+        <div id="media-result" class="card result-card hidden">
+          <div class="meta-header">
+            <img id="result-thumb" class="meta-thumb hidden" alt="" />
+            <div class="meta-info">
+              <div id="result-title" class="meta-title"></div>
+              <div id="result-sub" class="meta-sub"></div>
+            </div>
+          </div>
 
-        <div id="save-hint" class="save-hint" aria-live="polite"></div>
-      </section>
+          <div id="media-options" class="options-grid">
+            <label id="format-wrap" class="field">
+              <span>Format</span>
+              <select id="media-format-select"></select>
+            </label>
+            <label id="quality-wrap" class="field">
+              <span>Quality</span>
+              <select id="media-quality-select"></select>
+            </label>
+            <label id="bundle-wrap" class="field hidden">
+              <span>Save As</span>
+              <select id="media-bundle-select">
+                <option value="individual">Individual tracks (folder)</option>
+                <option value="zip">Single ZIP archive (.zip)</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="media-items-section" class="items-section hidden">
+            <div class="items-toolbar">
+              <label class="select-all-label">
+                <input id="select-all-checkbox" type="checkbox" />
+                <span>Select all</span>
+              </label>
+              <span id="selected-count" class="selected-count"></span>
+            </div>
+            <div id="media-items-list" class="items-list"></div>
+          </div>
+
+          <button id="media-download-btn" type="button" class="btn-primary download-cta">Download</button>
+        </div>
+      </div>
     </main>
     <script src="popup.js"></script>
   </body>

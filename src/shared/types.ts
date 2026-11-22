@@ -1,4 +1,75 @@
-export type DownloadKind = 'http' | 'torrent';
+export type DownloadKind = 'http' | 'torrent' | 'media';
+
+export type SocialPlatform = 'youtube' | 'instagram' | 'tiktok' | 'spotify';
+export type MediaOutputFormat =
+  | 'mp4'
+  | 'mkv'
+  | 'webm'
+  | 'mp3'
+  | 'wav'
+  | 'm4a'
+  | 'flac'
+  | 'opus';
+export type MediaQuality =
+  | 'best'
+  | '1080p'
+  | '720p'
+  | '480p'
+  | '360p'
+  | '320k'
+  | '192k'
+  | '128k';
+export type PlaylistBundleMode = 'individual' | 'zip';
+
+export interface SocialMediaItem {
+  id: string;
+  index: number;
+  kind: 'video' | 'image' | 'audio';
+  title: string;
+  artist?: string;
+  album?: string;
+  releaseYear?: string;
+  durationSeconds?: number | null;
+  thumbnailUrl?: string;
+  mediaUrl?: string;
+  sourceUrl: string;
+  ext?: string;
+  trackNumber?: number;
+  totalTracks?: number;
+}
+
+export interface SocialScanResult {
+  ok: boolean;
+  platform: SocialPlatform;
+  contentType:
+    | 'video'
+    | 'music'
+    | 'reel'
+    | 'post'
+    | 'carousel'
+    | 'track'
+    | 'album'
+    | 'playlist';
+  url: string;
+  title: string;
+  author?: string;
+  album?: string;
+  thumbnailUrl?: string;
+  durationSeconds?: number | null;
+  items: SocialMediaItem[];
+  isPrivate?: boolean;
+  error?: string;
+}
+
+export interface SocialDownloadRequest {
+  platform: SocialPlatform;
+  url: string;
+  title: string;
+  format?: MediaOutputFormat;
+  quality?: MediaQuality;
+  bundleMode?: PlaylistBundleMode;
+  items: SocialMediaItem[];
+}
 
 export type DownloadStatus =
   | 'queued'

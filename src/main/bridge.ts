@@ -1,13 +1,46 @@
 import http from 'node:http';
 import path from 'node:path';
 import { isHttpUrl, isMagnetUri, sanitizeFileName } from '../shared/constants';
-import type { BridgeStatus, BrowserInterceptPayload } from '../shared/types';
+import type {
+  BridgeStatus,
+  BrowserInterceptPayload,
+  MediaOutputFormat,
+  MediaQuality,
+  PlaylistBundleMode,
+  SocialDownloadRequest,
+  SocialMediaItem,
+  SocialPlatform,
+  SocialScanResult,
+} from '../shared/types';
 import type { LogManager } from './logger';
 import { isAllowedExtensionOrigin, sanitizeHeaderValue } from './security';
 
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_MEDIA_BODY_BYTES = 256 * 1024;
 const CLIENT_HEADER = 'x-myload-client';
 const EXPECTED_CLIENT = 'myload-extension';
+
+const VALID_PLATFORMS = new Set<SocialPlatform>(['youtube', 'instagram', 'tiktok', 'spotify']);
+const VALID_FORMATS = new Set<MediaOutputFormat>([
+  'mp4',
+  'mkv',
+  'webm',
+  'mp3',
+  'wav',
+  'm4a',
+  'flac',
+  'opus',
+]);
+const VALID_QUALITIES = new Set<MediaQuality>([
+  'best',
+  '1080p',
+  '720p',
+  '480p',
+  '360p',
+  '320k',
+  '192k',
+  '128k',
+]);
 
 export interface BridgeHandlers {
   getHealth: () => {
@@ -17,6 +50,10 @@ export interface BridgeHandlers {
   };
   onFocusWindow: () => void;
   onIntercept: (payload: BrowserInterceptPayload) => Promise<'confirm' | 'started'>;
+  onMediaScan?: (platform: SocialPlatform, url: string) => Promise<SocialScanResult>;
+  onMediaDownload?: (
+    req: SocialDownloadRequest
+  ) => Promise<{ ok: boolean; count: number; error?: string }>;
 }
 
 export class BrowserBridgeServer {
@@ -124,7 +161,7 @@ export class BrowserBridgeServer {
       this.sendJson(res, 200, {
         ok: true,
         app: 'MyLoad',
-        version: '1.0.0',
+        version: '1.0.1',
         ...health,
       });
       return;
@@ -214,6 +251,126 @@ export class BrowserBridgeServer {
 
       const mode = await this.handlers.onIntercept(payload);
       this.sendJson(res, 200, { ok: true, mode });
+      return;
+    }
+
+    if (req.method === 'POST' && reqUrl.pathname === '/api/v1/media/scan') {
+      if (!this.handlers.onMediaScan) {
+        this.sendJson(res, 501, { ok: false, error: 'Media scanner unavailable' });
+        return;
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        const bodyText = await readBodyLimited(req, MAX_BODY_BYTES);
+        parsed = JSON.parse(bodyText) as Record<string, unknown>;
+      } catch (err) {
+        const status = err instanceof PayloadTooLargeError ? 413 : 400;
+        this.sendJson(res, status, { ok: false, error: 'Invalid request body' });
+        return;
+      }
+
+      const platform = parsed.platform as SocialPlatform;
+      const rawUrl = typeof parsed.url === 'string' ? parsed.url.trim() : '';
+      if (!VALID_PLATFORMS.has(platform) || !rawUrl || !isHttpUrl(rawUrl)) {
+        this.sendJson(res, 400, { ok: false, error: 'Valid platform and http(s) URL required' });
+        return;
+      }
+
+      const result = await this.handlers.onMediaScan(platform, rawUrl);
+      this.sendJson(res, result.ok ? 200 : 400, result);
+      return;
+    }
+
+    if (req.method === 'POST' && reqUrl.pathname === '/api/v1/media/download') {
+      if (!this.handlers.onMediaDownload) {
+        this.sendJson(res, 501, { ok: false, error: 'Media downloader unavailable' });
+        return;
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        const bodyText = await readBodyLimited(req, MAX_MEDIA_BODY_BYTES);
+        parsed = JSON.parse(bodyText) as Record<string, unknown>;
+      } catch (err) {
+        const status = err instanceof PayloadTooLargeError ? 413 : 400;
+        this.sendJson(res, status, { ok: false, error: 'Invalid request body' });
+        return;
+      }
+
+      const platform = parsed.platform as SocialPlatform;
+      const rawUrl = typeof parsed.url === 'string' ? parsed.url.trim() : '';
+      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+      if (!VALID_PLATFORMS.has(platform) || !rawUrl || !isHttpUrl(rawUrl) || rawItems.length === 0) {
+        this.sendJson(res, 400, {
+          ok: false,
+          error: 'Valid platform, URL, and at least one selected item are required',
+        });
+        return;
+      }
+
+      const items: SocialMediaItem[] = [];
+      for (const entry of rawItems.slice(0, 200)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const obj = entry as Record<string, unknown>;
+        const itemKind =
+          obj.kind === 'image' || obj.kind === 'audio' || obj.kind === 'video'
+            ? obj.kind
+            : 'video';
+        const src = typeof obj.sourceUrl === 'string' && isHttpUrl(obj.sourceUrl) ? obj.sourceUrl : rawUrl;
+        const mediaUrl =
+          typeof obj.mediaUrl === 'string' && isHttpUrl(obj.mediaUrl) ? obj.mediaUrl : undefined;
+        const thumb =
+          typeof obj.thumbnailUrl === 'string' && isHttpUrl(obj.thumbnailUrl)
+            ? obj.thumbnailUrl
+            : undefined;
+        items.push({
+          id: typeof obj.id === 'string' ? obj.id.slice(0, 128) : `item-${items.length + 1}`,
+          index: typeof obj.index === 'number' ? obj.index : items.length,
+          kind: itemKind,
+          title: typeof obj.title === 'string' && obj.title.trim() ? obj.title.trim().slice(0, 240) : 'Media',
+          artist: typeof obj.artist === 'string' ? obj.artist.trim().slice(0, 200) : undefined,
+          album: typeof obj.album === 'string' ? obj.album.trim().slice(0, 200) : undefined,
+          releaseYear:
+            typeof obj.releaseYear === 'string' ? obj.releaseYear.trim().slice(0, 16) : undefined,
+          durationSeconds:
+            typeof obj.durationSeconds === 'number' && Number.isFinite(obj.durationSeconds)
+              ? obj.durationSeconds
+              : null,
+          thumbnailUrl: thumb,
+          mediaUrl,
+          sourceUrl: src,
+          ext: typeof obj.ext === 'string' ? obj.ext.trim().slice(0, 16) : undefined,
+          trackNumber: typeof obj.trackNumber === 'number' ? obj.trackNumber : undefined,
+          totalTracks: typeof obj.totalTracks === 'number' ? obj.totalTracks : undefined,
+        });
+      }
+
+      if (items.length === 0) {
+        this.sendJson(res, 400, { ok: false, error: 'No valid media items supplied' });
+        return;
+      }
+
+      const rawFormat = parsed.format as MediaOutputFormat | undefined;
+      const rawQuality = parsed.quality as MediaQuality | undefined;
+      const rawBundle: PlaylistBundleMode | undefined =
+        parsed.bundleMode === 'zip' || parsed.bundleMode === 'individual'
+          ? parsed.bundleMode
+          : undefined;
+
+      const mediaReq: SocialDownloadRequest = {
+        platform,
+        url: rawUrl,
+        title:
+          typeof parsed.title === 'string' && parsed.title.trim()
+            ? parsed.title.trim().slice(0, 240)
+            : items[0].title,
+        format: rawFormat && VALID_FORMATS.has(rawFormat) ? rawFormat : undefined,
+        quality: rawQuality && VALID_QUALITIES.has(rawQuality) ? rawQuality : undefined,
+        bundleMode: rawBundle,
+        items,
+      };
+
+      const outcome = await this.handlers.onMediaDownload(mediaReq);
+      this.sendJson(res, outcome.ok ? 200 : 400, outcome);
       return;
     }
 

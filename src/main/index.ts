@@ -411,13 +411,20 @@ function createElectronNetAdapter(): ElectronNetAdapter {
     urlStr: string,
     method: 'GET' | 'HEAD',
     headers: Record<string, string>,
-    redirects = 0
+    redirects = 0,
+    signal?: AbortSignal
   ): Promise<{
     req: Electron.ClientRequest;
     res: Electron.IncomingMessage;
     finalUrl: string;
   }> =>
     new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        reject(aborted);
+        return;
+      }
       const req = net.request({ url: urlStr, method, redirect: 'manual' });
       for (const [k, v] of Object.entries(headers)) {
         if (!v) continue;
@@ -426,7 +433,20 @@ function createElectronNetAdapter(): ElectronNetAdapter {
         } catch {
         }
       }
+      const onPreAbort = () => {
+        clearTimeout(timer);
+        try {
+          req.abort();
+        } catch {
+        }
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        reject(aborted);
+      };
+      signal?.addEventListener('abort', onPreAbort, { once: true });
+
       const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onPreAbort);
         try {
           req.abort();
         } catch {
@@ -436,6 +456,7 @@ function createElectronNetAdapter(): ElectronNetAdapter {
 
       req.on('response', (res) => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onPreAbort);
         const statusCode = res.statusCode ?? 0;
         const locHeader = res.headers.location;
         const location = Array.isArray(locHeader) ? locHeader[0] : locHeader;
@@ -456,7 +477,7 @@ function createElectronNetAdapter(): ElectronNetAdapter {
             return;
           }
           const nextHeaders = stripUnsafeRedirectHeaders(headers, urlStr, nextUrl);
-          openRaw(nextUrl, method, nextHeaders, redirects + 1)
+          openRaw(nextUrl, method, nextHeaders, redirects + 1, signal)
             .then(resolve)
             .catch(reject);
           return;
@@ -466,6 +487,7 @@ function createElectronNetAdapter(): ElectronNetAdapter {
 
       req.on('error', (err) => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onPreAbort);
         reject(err instanceof Error ? err : new Error(String(err)));
       });
 
@@ -503,12 +525,13 @@ function createElectronNetAdapter(): ElectronNetAdapter {
         aborted.name = 'AbortError';
         throw aborted;
       }
-      const { req, res } = await openRaw(url, 'GET', headers);
-      const pass = new PassThrough();
+      const { req, res } = await openRaw(url, 'GET', headers, 0, signal);
+      const pass = new PassThrough({ highWaterMark: 256 * 1024 });
       let destroyed = false;
       const cleanup = () => {
         if (destroyed) return;
         destroyed = true;
+        signal.removeEventListener('abort', onSignalAbort);
         try {
           req.abort();
         } catch {
@@ -517,19 +540,38 @@ function createElectronNetAdapter(): ElectronNetAdapter {
       };
       const onSignalAbort = () => cleanup();
       signal.addEventListener('abort', onSignalAbort, { once: true });
+      const flowRes = res as unknown as { pause?: () => void; resume?: () => void };
+      const onDrain = () => {
+        if (!destroyed) {
+          try {
+            flowRes.resume?.();
+          } catch {
+          }
+        }
+      };
+      pass.on('drain', onDrain);
       res.on('data', (chunk) => {
-        if (!destroyed) pass.write(chunk);
+        if (destroyed) return;
+        if (!pass.write(chunk)) {
+          try {
+            flowRes.pause?.();
+          } catch {
+          }
+        }
       });
       res.on('end', () => {
         signal.removeEventListener('abort', onSignalAbort);
+        pass.removeListener('drain', onDrain);
         pass.end();
       });
       res.on('aborted', () => {
         signal.removeEventListener('abort', onSignalAbort);
+        pass.removeListener('drain', onDrain);
         pass.destroy();
       });
       res.on('error', (err) => {
         signal.removeEventListener('abort', onSignalAbort);
+        pass.removeListener('drain', onDrain);
         pass.destroy(err instanceof Error ? err : new Error(String(err)));
       });
       return {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DownloadManager } from '../src/main/download-manager';
 import { LogManager } from '../src/main/logger';
 import {
+  DEFAULT_PUBLIC_TRACKERS,
   TorrentDownloadEngine,
   buildAnonymousClientOptions,
   probeTorrentSource,
@@ -540,6 +541,74 @@ describe('torrent probing', () => {
       expect(completedKeepSeeding).toBe(false);
       const downloaded = await fs.promises.readFile(path.join(destDir, 'AnonPack', 'secret.bin'));
       expect(downloaded.equals(anonPayload)).toBe(true);
+
+      const privateTorrentPath = path.join(tmpDir, 'private-only.torrent');
+      const privateBuf = await new Promise<Buffer>((resolve, reject) => {
+        createTorrent(
+          anonSeedDir,
+          {
+            name: 'PrivateOnly',
+            private: true,
+            announceList: [['http://private.tracker.invalid/announce']],
+          },
+          (err: Error | null, buf: Buffer) => {
+            if (err) reject(err);
+            else resolve(buf);
+          }
+        );
+      });
+      await fs.promises.writeFile(privateTorrentPath, privateBuf);
+      const privateProbe = await probeTorrentSource(privateTorrentPath);
+      expect(privateProbe.trackers).toEqual(['http://private.tracker.invalid/announce']);
+
+      let observedTrackers: string[] = [];
+      await engine.start(
+        {
+          id: 'private-tracker-check',
+          kind: 'torrent',
+          source: privateTorrentPath,
+          name: 'PrivateOnly',
+          saveDir: path.join(tmpDir, 'priv-dest'),
+          filePath: path.join(tmpDir, 'priv-dest', 'PrivateOnly'),
+          category: 'torrents',
+          status: 'downloading',
+          totalBytes: anonPayload.length,
+          downloadedBytes: 0,
+          uploadedBytes: 0,
+          downloadSpeed: 0,
+          uploadSpeed: 0,
+          etaSeconds: null,
+          resumeSupported: true,
+          segments: [],
+          addedAt: Date.now(),
+          retryCount: 0,
+          torrent: {
+            infoHash: privateProbe.infoHash || '',
+            peers: 0,
+            seeds: 0,
+            ratio: 0,
+            trackers: privateProbe.trackers ?? [],
+            torrentFilePath: privateTorrentPath,
+            files: privateProbe.files ?? [],
+          },
+        },
+        {
+          keepSeedingAfterComplete: false,
+          onProgress: (patch) => {
+            if (patch.torrent?.trackers) {
+              observedTrackers = patch.torrent.trackers;
+            }
+          },
+          onDownloadComplete: () => {},
+          onError: () => {},
+        }
+      );
+      await new Promise((r) => setTimeout(r, 450));
+      expect(observedTrackers).toEqual(['http://private.tracker.invalid/announce']);
+      for (const pub of DEFAULT_PUBLIC_TRACKERS) {
+        expect(observedTrackers).not.toContain(pub);
+      }
+      await engine.pause('private-tracker-check');
     } finally {
       await engine.destroyAll();
       await new Promise<void>((resolve) => {

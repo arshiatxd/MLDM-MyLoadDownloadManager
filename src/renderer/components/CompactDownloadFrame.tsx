@@ -355,15 +355,18 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     if (mode !== 'confirm') return;
     const hasTallSection =
       multiPartActive || torrentFiles.length > 0 || Boolean(dirValidation && (!dirValidation.valid || dirValidation.warning));
+    const anonExtra = detectedKind === 'torrent' && !socialRequest ? 58 : 0;
     const scheduleExtra = settings.showScheduleInPopup
       ? scheduleVal.startMode === 'specific' || scheduleVal.stopEnabled
         ? 120
         : 92
       : 0;
-    const targetHeight = Math.min(720, (hasTallSection ? 620 : 440) + scheduleExtra);
+    const targetHeight = Math.min(740, (hasTallSection ? 620 : 440) + anonExtra + scheduleExtra);
     void window.myload.resizeCurrentWindow(560, targetHeight);
   }, [
     mode,
+    detectedKind,
+    socialRequest,
     multiPartActive,
     torrentFiles.length,
     dirValidation,

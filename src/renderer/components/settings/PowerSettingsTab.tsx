@@ -94,6 +94,21 @@ export function PowerSettingsTab({ settings, onUpdate }: PowerSettingsTabProps) 
             <span>Keep seeding torrents after reaching 100%</span>
           </label>
 
+          <div>
+            <label className="flex cursor-pointer items-center gap-2 text-[var(--text-primary)]">
+              <input
+                type="checkbox"
+                checked={settings.torrentAnonymousMode}
+                onChange={(e) => onUpdate({ torrentAnonymousMode: e.target.checked })}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              <span>Enable Torrent Anonymous Mode by default</span>
+            </label>
+            <p className="mt-0.5 pl-6 text-[12px] text-[var(--text-secondary)]">
+              Uses an isolated torrent session with randomized Peer ID &amp; DHT node ID, hidden client version &amp; User-Agent, PE/MSE encryption, disabled LAN/UPnP/WebSeed leaks, and automatic stop at 100%.
+            </p>
+          </div>
+
           <label className="flex cursor-pointer items-center gap-2 text-[var(--text-primary)]">
             <input
               type="checkbox"

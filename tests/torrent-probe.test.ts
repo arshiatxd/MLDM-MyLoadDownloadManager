@@ -8,6 +8,7 @@ import { DownloadManager } from '../src/main/download-manager';
 import { LogManager } from '../src/main/logger';
 import {
   TorrentDownloadEngine,
+  buildAnonymousClientOptions,
   probeTorrentSource,
   resolveTorrentTargetPath,
   saveTorrentBufferToCache,
@@ -402,6 +403,143 @@ describe('torrent probing', () => {
         path.join(destDir, 'SeedPack', 'bin', 'app.bin')
       );
       expect(downloadedApp.equals(payloadA)).toBe(true);
+    } finally {
+      await engine.destroyAll();
+      await new Promise<void>((resolve) => {
+        try {
+          seeder.destroy(() => resolve());
+        } catch {
+          resolve();
+        }
+      });
+    }
+  });
+
+  it('enforces Torrent Anonymous Mode options, isolated client, and stops seeding at 100%', async () => {
+    const optsA = buildAnonymousClientOptions({
+      downloadLimit: -1,
+      uploadLimit: -1,
+      maxConns: 150,
+    });
+    const optsB = buildAnonymousClientOptions({
+      downloadLimit: -1,
+      uploadLimit: -1,
+      maxConns: 150,
+    });
+    expect(optsA.peerId).toMatch(/^[a-f0-9]{40}$/);
+    expect(optsA.nodeId).toMatch(/^[a-f0-9]{40}$/);
+    expect(optsA.peerId).not.toBe(optsB.peerId);
+    expect(optsA.nodeId).not.toBe(optsB.nodeId);
+    expect(optsA.userAgent).toBe('');
+    expect(optsA.secure).toBe(1);
+    expect(optsA.lsd).toBe(false);
+    expect(optsA.natUpnp).toBe(false);
+    expect(optsA.natPmp).toBe(false);
+    expect(optsA.webSeeds).toBe(false);
+    expect(optsA.utp).toBe(false);
+
+    const anonSeedDir = path.join(tmpDir, 'AnonPack');
+    await fs.promises.mkdir(anonSeedDir, { recursive: true });
+    const anonPayload = Buffer.alloc(32768, 0x3c);
+    await fs.promises.writeFile(path.join(anonSeedDir, 'secret.bin'), anonPayload);
+
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        anonSeedDir,
+        {
+          name: 'AnonPack',
+          pieceLength: 16384,
+          private: true,
+        },
+        (err: Error | null, buf: Buffer) => {
+          if (err) reject(err);
+          else resolve(buf);
+        }
+      );
+    });
+
+    const { default: WebTorrentCtor } = await import('webtorrent');
+    const seeder = new WebTorrentCtor({
+      dht: false,
+      tracker: false,
+      lsd: false,
+      utp: false,
+      secure: 1,
+    });
+
+    const destDir = path.join(tmpDir, 'anon-dest');
+    const logger = new LogManager(null);
+    const engine = new TorrentDownloadEngine(logger, path.join(tmpDir, 'anon-cache'));
+
+    try {
+      const seeded = await new Promise<{ infoHash: string }>((resolve, reject) => {
+        const t = seeder.add(torrentBuf, { path: tmpDir });
+        t.once('ready', () => resolve({ infoHash: t.infoHash }));
+        t.once('error', reject);
+      });
+
+      const seederAddr = (
+        seeder as unknown as { address: () => { port: number } | null }
+      ).address();
+      expect(seederAddr?.port).toBeGreaterThan(0);
+
+      const magnetUri = `magnet:?xt=urn:btih:${seeded.infoHash}&dn=AnonPack&x.pe=127.0.0.1:${seederAddr!.port}`;
+      const probed = await engine.probeMagnetMetadata(magnetUri, undefined, 8000, true);
+      expect(probed.files?.length).toBe(1);
+
+      let completedKeepSeeding: boolean | null = null;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Anonymous torrent timed out')), 8000);
+        void engine.start(
+          {
+            id: 'anon-swarm-item',
+            kind: 'torrent',
+            source: magnetUri,
+            name: 'AnonPack',
+            saveDir: destDir,
+            filePath: path.join(destDir, 'AnonPack'),
+            category: 'torrents',
+            status: 'downloading',
+            totalBytes: anonPayload.length,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadSpeed: 0,
+            uploadSpeed: 0,
+            etaSeconds: null,
+            resumeSupported: true,
+            segments: [],
+            addedAt: Date.now(),
+            retryCount: 0,
+            torrent: {
+              infoHash: seeded.infoHash,
+              peers: 0,
+              seeds: 0,
+              ratio: 0,
+              trackers: [],
+              magnetUri,
+              anonymousMode: true,
+              files: probed.files!,
+            },
+          },
+          {
+            keepSeedingAfterComplete: true,
+            onProgress: () => {},
+            onDownloadComplete: (_finalPath, _bytes, keepSeeding) => {
+              completedKeepSeeding = keepSeeding;
+              clearTimeout(timeout);
+              resolve();
+            },
+            onError: (msg) => {
+              clearTimeout(timeout);
+              reject(new Error(msg));
+            },
+          }
+        );
+      });
+
+      expect(completedKeepSeeding).toBe(false);
+      const downloaded = await fs.promises.readFile(path.join(destDir, 'AnonPack', 'secret.bin'));
+      expect(downloaded.equals(anonPayload)).toBe(true);
     } finally {
       await engine.destroyAll();
       await new Promise<void>((resolve) => {

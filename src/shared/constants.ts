@@ -132,6 +132,7 @@ export function createDefaultSettings(defaultDownloadDir: string): AppSettings {
     autoPowerAction: 'off',
 
     keepSeedingAfterComplete: false,
+    torrentAnonymousMode: false,
     minimizeToTray: true,
     autoResumeOnStart: true,
     desktopNotifications: true,

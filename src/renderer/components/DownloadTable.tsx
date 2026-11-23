@@ -20,6 +20,7 @@ import {
   PictureInPicture2,
   Play,
   RotateCw,
+  Shield,
   Trash2,
 } from 'lucide-react';
 import { getItemProgress } from '../../shared/categories';
@@ -258,6 +259,15 @@ const DownloadRow = memo(function DownloadRow({
               <div className="truncate font-medium text-[var(--text-primary)]" title={item.name}>
                 {item.name}
               </div>
+              {item.kind === 'torrent' && item.torrent?.anonymousMode && (
+                <span
+                  title="Torrent Anonymous Mode"
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded bg-[var(--success-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--success)]"
+                >
+                  <Shield className="h-2.5 w-2.5" aria-hidden="true" />
+                  <span>Anon</span>
+                </span>
+              )}
               {item.status !== 'completed' && (
                 <button
                   type="button"

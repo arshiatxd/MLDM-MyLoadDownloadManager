@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ChevronDown, FileCheck2, Layers, ScrollText } from 'lucide-react';
+import { ChevronDown, FileCheck2, Layers, ScrollText, Shield } from 'lucide-react';
 import { formatBytes, formatEta, formatSpeed } from '../../shared/constants';
 import type { DownloadItem, LogEntry } from '../../shared/types';
 import { TorrentFileTree } from './TorrentFileTree';
@@ -154,6 +154,15 @@ export function InspectorPanel({
           <span className="truncate text-[12.5px] font-medium text-[var(--text-secondary)]" title={item.name}>
             {item.name}
           </span>
+          {item.kind === 'torrent' && item.torrent?.anonymousMode && (
+            <span
+              title="Torrent Anonymous Mode active"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--success-soft)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--success)]"
+            >
+              <Shield className="h-3 w-3" aria-hidden="true" />
+              <span>Anonymous</span>
+            </span>
+          )}
         </div>
 
         <button

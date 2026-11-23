@@ -65,6 +65,10 @@ declare module 'webtorrent' {
       remotePort?: number;
       downloaded?: number;
       uploaded?: number;
+      isSeeder?: boolean;
+      peerChoking?: boolean;
+      extendedHandshake?: Record<string, unknown>;
+      downloadSpeed?: () => number;
       peerPieces?: { get: (idx: number) => boolean };
     }>;
     addPeer(peer: string): boolean;
@@ -74,6 +78,10 @@ declare module 'webtorrent' {
   }
 
   export interface WebTorrentOptions {
+    peerId?: string | Uint8Array;
+    nodeId?: string | Uint8Array;
+    userAgent?: string;
+    secure?: number;
     downloadLimit?: number;
     uploadLimit?: number;
     maxConns?: number;
@@ -82,6 +90,8 @@ declare module 'webtorrent' {
     tracker?: boolean | Record<string, unknown>;
     lsd?: boolean;
     utPex?: boolean;
+    natUpnp?: boolean;
+    natPmp?: boolean;
     webSeeds?: boolean;
   }
 

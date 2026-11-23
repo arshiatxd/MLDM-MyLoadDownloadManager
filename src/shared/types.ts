@@ -130,6 +130,7 @@ export interface TorrentMeta {
   trackers: string[];
   magnetUri?: string;
   torrentFilePath?: string;
+  anonymousMode?: boolean;
   files: TorrentFileInfo[];
 }
 
@@ -248,6 +249,7 @@ export interface AppSettings {
   autoPowerAction: PowerAction;
 
   keepSeedingAfterComplete: boolean;
+  torrentAnonymousMode: boolean;
   minimizeToTray: boolean;
   autoResumeOnStart: boolean;
   desktopNotifications: boolean;
@@ -302,6 +304,7 @@ export interface AddDownloadRequest {
   requestHeaders?: Record<string, string>;
   schedule?: DownloadSchedule;
   priority?: DownloadPriority;
+  anonymousMode?: boolean;
 }
 
 export interface BrowserInterceptPayload {

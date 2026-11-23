@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -165,8 +166,10 @@ interface ActiveTorrentEntry {
   torrent: WebTorrentTorrent;
   pollTimer: ReturnType<typeof setInterval>;
   selectedIndices: Set<number> | null;
+  anonymousMode: boolean;
   completionFired: boolean;
   stopping: boolean;
+  lastTrackerNudgeAt: number;
 }
 
 export async function parseTorrentBuffer(
@@ -342,8 +345,33 @@ async function fetchPublicTorrentMetadataCache(
   }
 }
 
+export function buildAnonymousClientOptions(opts: {
+  downloadLimit: number;
+  uploadLimit: number;
+  maxConns: number;
+}) {
+  return {
+    peerId: crypto.randomBytes(20).toString('hex'),
+    nodeId: crypto.randomBytes(20).toString('hex'),
+    userAgent: '',
+    secure: 1,
+    downloadLimit: opts.downloadLimit,
+    uploadLimit: opts.uploadLimit,
+    maxConns: opts.maxConns,
+    utp: false,
+    lsd: false,
+    natUpnp: false,
+    natPmp: false,
+    webSeeds: false,
+    tracker: {
+      announce: DEFAULT_PUBLIC_TRACKERS,
+    },
+  };
+}
+
 export class TorrentDownloadEngine {
   private client: WebTorrent | null = null;
+  private anonClient: WebTorrent | null = null;
   private readonly logger: LogManager;
   private readonly active = new Map<string, ActiveTorrentEntry>();
   private readonly activeProbes = new Map<string, Promise<ProbeResult>>();
@@ -352,7 +380,7 @@ export class TorrentDownloadEngine {
   private cacheDir: string | null = null;
   private dlLimit: number | null = null;
   private ulLimit: number | null = null;
-  private maxConns = 120;
+  private maxConns = 150;
   private idleDestroyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(logger: LogManager, cacheDir?: string) {
@@ -367,16 +395,119 @@ export class TorrentDownloadEngine {
   setLimits(dlBytesPerSec: number | null, ulBytesPerSec: number | null): void {
     this.dlLimit = dlBytesPerSec;
     this.ulLimit = ulBytesPerSec;
-    if (this.client && !this.client.destroyed) {
-      this.client.throttleDownload(dlBytesPerSec ?? -1);
-      this.client.throttleUpload(ulBytesPerSec ?? -1);
+    for (const c of [this.client, this.anonClient]) {
+      if (c && !c.destroyed) {
+        c.throttleDownload(dlBytesPerSec ?? -1);
+        c.throttleUpload(ulBytesPerSec ?? -1);
+      }
     }
   }
 
   setMaxConns(maxConns: number): void {
     this.maxConns = maxConns;
-    if (this.client && !this.client.destroyed) {
-      this.client.maxConns = maxConns;
+    for (const c of [this.client, this.anonClient]) {
+      if (c && !c.destroyed) {
+        c.maxConns = maxConns;
+      }
+    }
+  }
+
+  private tunePeerSockets(torrent: WebTorrentTorrent): void {
+    const raw = torrent as unknown as {
+      _peers?: Map<
+        string,
+        {
+          conn?: {
+            _myloadTuned?: boolean;
+            setNoDelay?: (noDelay?: boolean) => void;
+            setKeepAlive?: (enable?: boolean, initialDelay?: number) => void;
+          };
+        }
+      >;
+    };
+    if (!raw?._peers || typeof raw._peers.values !== 'function') return;
+    for (const peer of raw._peers.values()) {
+      const conn = peer?.conn;
+      if (!conn || conn._myloadTuned) continue;
+      conn._myloadTuned = true;
+      try {
+        conn.setNoDelay?.(true);
+        conn.setKeepAlive?.(true, 30000);
+      } catch {
+      }
+    }
+  }
+
+  private enhanceWireThroughput(wireObj: unknown, anonymousMode: boolean): void {
+    const wire = wireObj as {
+      _myloadEnhanced?: boolean;
+      downloaded?: number;
+      peerChoking?: boolean;
+      extendedHandshake?: Record<string, unknown>;
+      downloadSpeed?: () => number;
+      on?: (event: string, fn: (bytes: number) => void) => void;
+    };
+    if (!wire || wire._myloadEnhanced) return;
+    wire._myloadEnhanced = true;
+
+    if (wire.extendedHandshake && typeof wire.extendedHandshake === 'object') {
+      wire.extendedHandshake.reqq = 250;
+      if (anonymousMode) {
+        delete wire.extendedHandshake.v;
+      }
+    }
+
+    if (typeof wire.downloadSpeed === 'function') {
+      const origSpeed = wire.downloadSpeed.bind(wire);
+      let lastDataAt = 0;
+      let peakSpeed = 0;
+      let peakAt = 0;
+
+      wire.on?.('download', (bytes: number) => {
+        if (bytes > 0) {
+          const now = Date.now();
+          lastDataAt = now;
+          const live = origSpeed();
+          if (live > peakSpeed) {
+            peakSpeed = live;
+            peakAt = now;
+          }
+        }
+      });
+
+      wire.downloadSpeed = () => {
+        const live = origSpeed();
+        const now = Date.now();
+        if (live > peakSpeed) {
+          peakSpeed = live;
+          peakAt = now;
+        }
+        if (
+          !wire.peerChoking &&
+          (wire.downloaded || 0) > 0 &&
+          lastDataAt > 0 &&
+          now - lastDataAt < 4000
+        ) {
+          const elapsedSec = Math.max(0, (now - peakAt) / 1000);
+          const decayedPeak = peakSpeed * Math.pow(0.88, elapsedSec);
+          return Math.max(live, Math.round(decayedPeak * 0.72), 384 * 1024);
+        }
+        return live;
+      };
+    }
+  }
+
+  private disableUnusedRarityMap(torrent: WebTorrentTorrent): void {
+    const raw = torrent as unknown as {
+      strategy?: string;
+      _rarityMap?: { destroy?: () => void } | null;
+    };
+    if (raw.strategy !== 'rarest' && raw._rarityMap) {
+      try {
+        raw._rarityMap.destroy?.();
+      } catch {
+      }
+      raw._rarityMap = null;
     }
   }
 
@@ -402,6 +533,8 @@ export class TorrentDownloadEngine {
         if (raw._queue.length >= before) break;
       }
     }
+
+    this.tunePeerSockets(torrent);
 
     const hash = (torrent.infoHash || '').trim().toLowerCase();
     if (hash && Array.isArray(torrent.wires) && torrent.wires.length > 0) {
@@ -595,7 +728,8 @@ export class TorrentDownloadEngine {
       }
 
       await fs.promises.mkdir(item.saveDir, { recursive: true });
-      const client = await this.ensureClient();
+      const anonymousMode = Boolean(item.torrent?.anonymousMode);
+      const client = await this.ensureClient(anonymousMode);
 
       const sourceNorm = normalizeTorrentSource(item.source);
       let expectedInfoHash = (item.torrent?.infoHash || '').trim().toLowerCase();
@@ -680,7 +814,11 @@ export class TorrentDownloadEngine {
       const hasPartialSelection = selectedIndices !== null && selectedIndices.size < savedFiles.length;
       const mergedAnnounce = mergeTrackers(item.torrent?.trackers);
 
-      this.logger.info('Torrent', `Starting ${item.name}`, item.id);
+      this.logger.info(
+        'Torrent',
+        `Starting ${item.name}${anonymousMode ? ' (Anonymous Mode)' : ''}`,
+        item.id
+      );
       opts.onProgress({
         status: item.status === 'seeding' ? 'seeding' : 'downloading',
         errorMessage: undefined,
@@ -689,10 +827,10 @@ export class TorrentDownloadEngine {
       const torrent = client.add(torrentInput, {
         path: item.saveDir,
         deselect: hasPartialSelection,
-        strategy: 'rarest',
-        storeCacheSlots: 64,
-        uploads: 20,
-        maxWebConns: 8,
+        strategy: 'sequential',
+        storeCacheSlots: 96,
+        uploads: 24,
+        maxWebConns: anonymousMode ? 0 : 8,
         announce: mergedAnnounce,
       });
 
@@ -707,11 +845,32 @@ export class TorrentDownloadEngine {
         torrent,
         pollTimer: setInterval(() => {
           this.pumpPeerQueue(torrent);
+          const now = Date.now();
+          if (
+            !entry.stopping &&
+            !entry.completionFired &&
+            (torrent.numPeers ?? 0) < 12 &&
+            now - entry.lastTrackerNudgeAt >= 15000
+          ) {
+            entry.lastTrackerNudgeAt = now;
+            const rawDiscovery = (
+              torrent as unknown as {
+                discovery?: { tracker?: { update?: () => void }; dhtAnnounce?: () => void };
+              }
+            ).discovery;
+            try {
+              rawDiscovery?.tracker?.update?.();
+              rawDiscovery?.dhtAnnounce?.();
+            } catch {
+            }
+          }
           this.emitSnapshot(item, entry, opts);
         }, 350),
         selectedIndices,
+        anonymousMode,
         completionFired: item.status === 'seeding',
         stopping: false,
+        lastTrackerNudgeAt: Date.now(),
       };
 
       this.active.set(item.id, entry);
@@ -720,8 +879,10 @@ export class TorrentDownloadEngine {
         if (!entry.stopping) this.pumpPeerQueue(torrent);
       });
 
-      torrent.on('wire', () => {
-        if (!entry.stopping) this.pumpPeerQueue(torrent);
+      torrent.on('wire', (wire: unknown) => {
+        if (entry.stopping) return;
+        this.enhanceWireThroughput(wire, anonymousMode);
+        this.pumpPeerQueue(torrent);
       });
 
       torrent.on('warning', (err) => {
@@ -740,6 +901,7 @@ export class TorrentDownloadEngine {
 
       torrent.once('metadata', () => {
         if (entry.stopping || torrent.destroyed) return;
+        this.disableUnusedRarityMap(torrent);
         if (!cachedTorrentPath && this.cacheDir && torrent.torrentFile) {
           void saveTorrentBufferToCache(Buffer.from(torrent.torrentFile), this.cacheDir)
             .then((saved) => {
@@ -835,7 +997,8 @@ export class TorrentDownloadEngine {
   async probeMagnetMetadata(
     magnetUri: string,
     cacheDir?: string,
-    timeoutMs = 22000
+    timeoutMs = 22000,
+    anonymousMode = false
   ): Promise<ProbeResult> {
     const effectiveCacheDir = cacheDir ?? this.cacheDir ?? undefined;
     const basic = await probeTorrentSource(magnetUri);
@@ -870,7 +1033,8 @@ export class TorrentDownloadEngine {
       basic,
       infoHash,
       effectiveCacheDir,
-      timeoutMs
+      timeoutMs,
+      anonymousMode
     );
     this.activeProbes.set(infoHash, probePromise);
     try {
@@ -886,19 +1050,29 @@ export class TorrentDownloadEngine {
     basic: ProbeResult,
     infoHash: string,
     cacheDir: string | undefined,
-    timeoutMs: number
+    timeoutMs: number,
+    anonymousMode: boolean
   ): Promise<ProbeResult> {
     const metaTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'myload-meta-'));
     const { default: WebTorrentCtor } = await import('webtorrent');
-    const tempClient = new WebTorrentCtor({
-      downloadLimit: -1,
-      uploadLimit: -1,
-      maxConns: 60,
-      utp: false,
-      tracker: {
-        announce: DEFAULT_PUBLIC_TRACKERS,
-      },
-    });
+    const tempClient = new WebTorrentCtor(
+      anonymousMode
+        ? buildAnonymousClientOptions({
+            downloadLimit: -1,
+            uploadLimit: -1,
+            maxConns: 60,
+          })
+        : {
+            downloadLimit: -1,
+            uploadLimit: -1,
+            maxConns: 60,
+            secure: 0,
+            utp: false,
+            tracker: {
+              announce: DEFAULT_PUBLIC_TRACKERS,
+            },
+          }
+    );
     tempClient.on('error', () => {});
 
     const httpAbort = new AbortController();
@@ -930,16 +1104,18 @@ export class TorrentDownloadEngine {
           });
         }, timeoutMs);
 
-        void fetchPublicTorrentMetadataCache(
-          magnetUri,
-          infoHash,
-          cacheDir,
-          httpAbort.signal
-        ).then((httpCached) => {
-          if (httpCached && httpCached.files && httpCached.files.length > 0) {
-            finish(httpCached);
-          }
-        });
+        if (!anonymousMode) {
+          void fetchPublicTorrentMetadataCache(
+            magnetUri,
+            infoHash,
+            cacheDir,
+            httpAbort.signal
+          ).then((httpCached) => {
+            if (httpCached && httpCached.files && httpCached.files.length > 0) {
+              finish(httpCached);
+            }
+          });
+        }
 
         const mergedTrackers = mergeTrackers(basic.trackers);
         const torrent = tempClient.add(magnetUri, {
@@ -963,8 +1139,10 @@ export class TorrentDownloadEngine {
           if (!settled) this.pumpPeerQueue(torrent, 60);
         });
 
-        torrent.on('wire', () => {
-          if (!settled) this.pumpPeerQueue(torrent, 60);
+        torrent.on('wire', (wire: unknown) => {
+          if (settled) return;
+          this.enhanceWireThroughput(wire, anonymousMode);
+          this.pumpPeerQueue(torrent, 60);
         });
 
         torrent.on('error', () => {
@@ -1049,21 +1227,50 @@ export class TorrentDownloadEngine {
     this.activeProbeCancels.clear();
     const ids = [...this.active.keys()];
     await Promise.all(ids.map((id) => this.stopTorrent(id, false)));
-    if (this.client && !this.client.destroyed) {
-      await new Promise<void>((resolve) => {
-        this.client!.destroy(() => resolve());
-      });
-      this.client = null;
-    }
+    const clients = [this.client, this.anonClient];
+    this.client = null;
+    this.anonClient = null;
+    await Promise.all(
+      clients.map((c) =>
+        c && !c.destroyed
+          ? new Promise<void>((resolve) => {
+              try {
+                c.destroy(() => resolve());
+              } catch {
+                resolve();
+              }
+            })
+          : Promise.resolve()
+      )
+    );
   }
 
-  private async ensureClient(): Promise<WebTorrent> {
+  private async ensureClient(anonymousMode = false): Promise<WebTorrent> {
+    if (anonymousMode) {
+      if (!this.anonClient || this.anonClient.destroyed) {
+        const { default: WebTorrentCtor } = await import('webtorrent');
+        this.anonClient = new WebTorrentCtor(
+          buildAnonymousClientOptions({
+            downloadLimit: this.dlLimit ?? -1,
+            uploadLimit: this.ulLimit ?? -1,
+            maxConns: this.maxConns,
+          })
+        );
+        this.anonClient.on('error', (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.error('TorrentClient', msg);
+        });
+      }
+      return this.anonClient;
+    }
+
     if (!this.client || this.client.destroyed) {
       const { default: WebTorrentCtor } = await import('webtorrent');
       this.client = new WebTorrentCtor({
         downloadLimit: this.dlLimit ?? -1,
         uploadLimit: this.ulLimit ?? -1,
         maxConns: this.maxConns,
+        secure: 0,
         utp: false,
         tracker: {
           announce: DEFAULT_PUBLIC_TRACKERS,
@@ -1085,13 +1292,21 @@ export class TorrentDownloadEngine {
   }
 
   private scheduleIdleDestroy(): void {
-    if (this.active.size > 0 || !this.client || this.idleDestroyTimer) return;
+    if (this.active.size > 0 || (!this.client && !this.anonClient) || this.idleDestroyTimer) {
+      return;
+    }
     this.idleDestroyTimer = setTimeout(() => {
       this.idleDestroyTimer = null;
-      if (this.active.size === 0 && this.client && !this.client.destroyed) {
-        const client = this.client;
+      if (this.active.size !== 0) return;
+      if (this.client && !this.client.destroyed) {
+        const c = this.client;
         this.client = null;
-        client.destroy(() => {});
+        c.destroy(() => {});
+      }
+      if (this.anonClient && !this.anonClient.destroyed) {
+        const a = this.anonClient;
+        this.anonClient = null;
+        a.destroy(() => {});
       }
     }, 180000);
     this.idleDestroyTimer.unref?.();
@@ -1152,6 +1367,7 @@ export class TorrentDownloadEngine {
       trackers: t.announce?.length ? t.announce : item.torrent?.trackers ?? [],
       magnetUri: t.magnetURI || item.torrent?.magnetUri,
       torrentFilePath: item.torrent?.torrentFilePath,
+      anonymousMode: entry.anonymousMode,
       files,
     };
 
@@ -1216,7 +1432,8 @@ export class TorrentDownloadEngine {
 
     this.logger.info('Torrent', `Download complete for ${finalName}`, item.id);
 
-    if (opts.keepSeedingAfterComplete) {
+    const keepSeeding = entry.anonymousMode ? false : opts.keepSeedingAfterComplete;
+    if (keepSeeding) {
       opts.onDownloadComplete(finalPath, finalBytes, true);
     } else {
       void this.stopTorrent(item.id, false).then(() => {
@@ -1251,20 +1468,11 @@ export class TorrentDownloadEngine {
 }
 
 function countSeeds(t: WebTorrentTorrent): number {
-  const totalPieces = t.pieces?.length ?? 0;
-  if (totalPieces === 0) return 0;
-
   let seeds = 0;
   for (const wire of t.wires ?? []) {
-    if (!wire?.peerPieces) continue;
-    let hasAll = true;
-    for (let i = 0; i < totalPieces; i++) {
-      if (!wire.peerPieces.get(i)) {
-        hasAll = false;
-        break;
-      }
+    if (wire?.isSeeder) {
+      seeds += 1;
     }
-    if (hasAll) seeds += 1;
   }
   return seeds;
 }

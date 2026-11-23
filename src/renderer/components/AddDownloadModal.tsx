@@ -5,6 +5,7 @@ import {
   FileUp,
   FolderOpen,
   Loader2,
+  Shield,
   X,
 } from 'lucide-react';
 import { classifyFileName } from '../../shared/categories';
@@ -83,6 +84,7 @@ export function AddDownloadModal({
   );
   const [suggestedSize, setSuggestedSize] = useState<number | null>(null);
   const [alwaysUseDir, setAlwaysUseDir] = useState(false);
+  const [anonymousMode, setAnonymousMode] = useState(settings.torrentAnonymousMode);
   const [probing, setProbing] = useState(false);
   const [probeRetryNonce, setProbeRetryNonce] = useState(0);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
@@ -120,6 +122,7 @@ export function AddDownloadModal({
     setRequestHeaders(initialRequest?.requestHeaders);
     setSuggestedSize(initialRequest?.fileSize ?? null);
     setAlwaysUseDir(settings.alwaysUseDefaultDir);
+    setAnonymousMode(Boolean(settings.torrentAnonymousMode));
     setProbe(null);
     setProbeError(null);
     setDirValidation(null);
@@ -164,6 +167,7 @@ export function AddDownloadModal({
     initialRequest,
     settings.defaultDownloadDir,
     settings.alwaysUseDefaultDir,
+    settings.torrentAnonymousMode,
     settings.queueMode,
   ]);
 
@@ -534,6 +538,7 @@ export function AddDownloadModal({
             : undefined,
         requestHeaders,
         schedule,
+        anonymousMode: detectedKind === 'torrent' ? anonymousMode : undefined,
       });
       onClose();
     } catch (err) {
@@ -849,6 +854,33 @@ export function AddDownloadModal({
                 </label>
               </div>
             </div>
+          )}
+
+          {detectedKind === 'torrent' && !isBatchMode && !socialRequest && (
+            <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/60 px-3 py-2 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
+                <Shield
+                  className={`h-4 w-4 shrink-0 ${
+                    anonymousMode ? 'text-[var(--success)]' : 'text-[var(--text-secondary)]'
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <div className="font-medium text-[var(--text-primary)]">
+                    Torrent Anonymous Mode
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)]">
+                    Enables PE/MSE encryption, randomizes Peer ID &amp; DHT ID, hides client version, blocks LAN/UPnP/WebSeed leaks, and stops seeding at 100%.
+                  </div>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={anonymousMode}
+                onChange={(e) => setAnonymousMode(e.target.checked)}
+                className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+              />
+            </label>
           )}
 
           {torrentFiles.length > 0 && (

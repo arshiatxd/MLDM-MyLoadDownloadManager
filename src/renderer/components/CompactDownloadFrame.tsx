@@ -11,6 +11,7 @@ import {
   Pause,
   Play,
   RotateCw,
+  Shield,
   X,
 } from 'lucide-react';
 import { classifyFileName, getItemProgress } from '../../shared/categories';
@@ -76,6 +77,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   );
   const [suggestedSize, setSuggestedSize] = useState<number | null>(null);
   const [alwaysUseDir, setAlwaysUseDir] = useState(false);
+  const [anonymousMode, setAnonymousMode] = useState(false);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [probeRetryNonce, setProbeRetryNonce] = useState(0);
@@ -117,6 +119,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
       setSettings(snap.settings);
       setDownloads(snap.downloads);
       setBatchQueueMode(snap.settings.queueMode);
+      setAnonymousMode(Boolean(snap.settings.torrentAnonymousMode));
 
       if (!ses) {
         setLoadingSession(false);
@@ -493,6 +496,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
         selectedFileIndices: torrentFiles.length > 0 ? selectedFileIndices : undefined,
         requestHeaders,
         schedule,
+        anonymousMode: detectedKind === 'torrent' ? anonymousMode : undefined,
       });
 
       if (deferredStart) {
@@ -745,6 +749,31 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             )}
           </div>
 
+          {detectedKind === 'torrent' && !socialRequest && (
+            <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/55 px-3 py-2 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
+                <Shield
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    anonymousMode ? 'text-[var(--success)]' : 'text-[var(--text-secondary)]'
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <div className="font-medium text-[var(--text-primary)]">Anonymous mode</div>
+                  <div className="truncate text-[11px] text-[var(--text-secondary)]">
+                    PE/MSE encryption · random Peer ID · no LAN/UPnP/HTTP leaks · no seeding
+                  </div>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={anonymousMode}
+                onChange={(e) => setAnonymousMode(e.target.checked)}
+                className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+              />
+            </label>
+          )}
+
           {torrentFiles.length > 0 ? (
             <TorrentFileTree
               compact
@@ -824,15 +853,26 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
                       : primaryItem?.saveDir ?? ''}
                   </div>
                 </div>
-                <span
-                  className="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase"
-                  style={{
-                    backgroundColor: allCompleted ? 'var(--success-soft)' : 'var(--accent-soft)',
-                    color: allCompleted ? 'var(--success)' : 'var(--accent-text)',
-                  }}
-                >
-                  {primaryItem?.status ?? 'probing'}
-                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {primaryItem?.kind === 'torrent' && primaryItem.torrent?.anonymousMode && (
+                    <span
+                      title="Torrent Anonymous Mode active"
+                      className="inline-flex items-center gap-1 rounded-full bg-[var(--success-soft)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--success)]"
+                    >
+                      <Shield className="h-3 w-3" aria-hidden="true" />
+                      <span>Anon</span>
+                    </span>
+                  )}
+                  <span
+                    className="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase"
+                    style={{
+                      backgroundColor: allCompleted ? 'var(--success-soft)' : 'var(--accent-soft)',
+                      color: allCompleted ? 'var(--success)' : 'var(--accent-text)',
+                    }}
+                  >
+                    {primaryItem?.status ?? 'probing'}
+                  </span>
+                </div>
               </div>
 
               <div>

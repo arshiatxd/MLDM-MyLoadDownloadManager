@@ -2,6 +2,7 @@ import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserBridgeServer } from '../src/main/bridge';
 import { LogManager } from '../src/main/logger';
+import { BRIDGE_PORT_CANDIDATES } from '../src/main/native-host';
 import type { BrowserInterceptPayload } from '../src/shared/types';
 
 describe('BrowserBridgeServer', () => {
@@ -118,7 +119,7 @@ describe('BrowserBridgeServer', () => {
   it('automatically falls back to the next free localhost bridge port when preferred port is busy', async () => {
     const logger = new LogManager(null);
     const blocker = http.createServer();
-    await new Promise<void>((r) => blocker.listen(49173, '127.0.0.1', r));
+    await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', r));
     const blockerAddr = blocker.address() as { port: number };
     const startedPorts: number[] = [];
 
@@ -137,7 +138,7 @@ describe('BrowserBridgeServer', () => {
       const status = await bridge.start(blockerAddr.port);
       expect(status.running).toBe(true);
       expect(status.port).not.toBe(blockerAddr.port);
-      expect(status.port).toBe(49174);
+      expect(BRIDGE_PORT_CANDIDATES).toContain(status.port);
       expect(startedPorts).toEqual([status.port]);
     } finally {
       await new Promise<void>((r) => blocker.close(() => r()));

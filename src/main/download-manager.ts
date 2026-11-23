@@ -293,7 +293,12 @@ export class DownloadManager {
     }
 
     if (isMagnetUri(trimmed)) {
-      return this.torrentEngine.probeMagnetMetadata(trimmed, this.torrentsCacheDir);
+      return this.torrentEngine.probeMagnetMetadata(
+        trimmed,
+        this.torrentsCacheDir,
+        22000,
+        this.settings.torrentAnonymousMode
+      );
     }
 
     if (isTorrentFilePath(trimmed) || trimmed.startsWith('file://')) {
@@ -433,6 +438,7 @@ export class DownloadManager {
         trackers: probe?.trackers ?? [],
         magnetUri: isMagnetUri(source) ? source : undefined,
         torrentFilePath: resolvedTorrentFilePath,
+        anonymousMode: Boolean(req.anonymousMode ?? this.settings.torrentAnonymousMode),
         files,
       };
     }
@@ -1265,7 +1271,7 @@ export class DownloadManager {
       this.observedAggregatePeak = currentDlSpeed;
     }
 
-    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 28 : 120);
+    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 32 : 150);
     this.networkBalancer.configure({
       enabled: this.settings.gamingModeEnabled,
       active: activeItems.length > 0,

@@ -283,5 +283,135 @@ describe('torrent probing', () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+
+  it('discovers magnet ut_metadata from a live peer without timing out and downloads selected files rapidly', async () => {
+    const seedContentDir = path.join(tmpDir, 'SeedPack');
+    await fs.promises.mkdir(path.join(seedContentDir, 'bin'), { recursive: true });
+    const payloadA = Buffer.alloc(32768, 0x5a);
+    const payloadB = Buffer.from('readme-contents-for-torrent-test');
+    await fs.promises.writeFile(path.join(seedContentDir, 'bin', 'app.bin'), payloadA);
+    await fs.promises.writeFile(path.join(seedContentDir, 'notes.txt'), payloadB);
+
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        seedContentDir,
+        {
+          name: 'SeedPack',
+          pieceLength: 16384,
+          private: true,
+        },
+        (err: Error | null, buf: Buffer) => {
+          if (err) reject(err);
+          else resolve(buf);
+        }
+      );
+    });
+
+    const { default: WebTorrentCtor } = await import('webtorrent');
+    const seeder = new WebTorrentCtor({
+      dht: false,
+      tracker: false,
+      lsd: false,
+      utp: false,
+    });
+
+    const cacheDir = path.join(tmpDir, 'magnet-cache');
+    const destDir = path.join(tmpDir, 'magnet-dest');
+    const logger = new LogManager(null);
+    const engine = new TorrentDownloadEngine(logger, cacheDir);
+
+    try {
+      const seededTorrent = await new Promise<{ infoHash: string }>((resolve, reject) => {
+        const t = seeder.add(torrentBuf, { path: tmpDir });
+        t.once('ready', () => resolve({ infoHash: t.infoHash }));
+        t.once('error', reject);
+      });
+
+      const seederAddr = (
+        seeder as unknown as { address: () => { port: number } | null }
+      ).address();
+      expect(seederAddr?.port).toBeGreaterThan(0);
+
+      const magnetUri = `magnet:?xt=urn:btih:${seededTorrent.infoHash}&dn=SeedPack&x.pe=127.0.0.1:${seederAddr!.port}`;
+      const startMs = Date.now();
+      const probed = await engine.probeMagnetMetadata(magnetUri, cacheDir, 8000);
+      const elapsedMs = Date.now() - startMs;
+
+      expect(elapsedMs).toBeLessThan(5000);
+      expect(probed.warning).toBeUndefined();
+      expect(probed.files?.length).toBe(2);
+      expect(probed.totalBytes).toBe(payloadA.length + payloadB.length);
+      expect(fs.existsSync(path.join(cacheDir, `${seededTorrent.infoHash}.torrent`))).toBe(true);
+
+      await fs.promises.unlink(path.join(cacheDir, `${seededTorrent.infoHash}.torrent`));
+
+      const appFileIndex = probed.files!.find((f) => f.name === 'app.bin')!.index;
+      const notesFileIndex = probed.files!.find((f) => f.name === 'notes.txt')!.index;
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Torrent download timed out')), 8000);
+        void engine.start(
+          {
+            id: 'live-swarm-item',
+            kind: 'torrent',
+            source: magnetUri,
+            name: 'SeedPack',
+            saveDir: destDir,
+            filePath: path.join(destDir, 'SeedPack'),
+            category: 'torrents',
+            status: 'downloading',
+            totalBytes: payloadA.length,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadSpeed: 0,
+            uploadSpeed: 0,
+            etaSeconds: null,
+            resumeSupported: true,
+            segments: [],
+            addedAt: Date.now(),
+            retryCount: 0,
+            torrent: {
+              infoHash: seededTorrent.infoHash,
+              peers: 0,
+              seeds: 0,
+              ratio: 0,
+              trackers: [],
+              magnetUri,
+              files: [
+                { ...probed.files![appFileIndex], selected: true },
+                { ...probed.files![notesFileIndex], selected: false },
+              ],
+            },
+          },
+          {
+            keepSeedingAfterComplete: false,
+            onProgress: () => {},
+            onDownloadComplete: () => {
+              clearTimeout(timeout);
+              resolve();
+            },
+            onError: (msg) => {
+              clearTimeout(timeout);
+              reject(new Error(msg));
+            },
+          }
+        );
+      });
+
+      const downloadedApp = await fs.promises.readFile(
+        path.join(destDir, 'SeedPack', 'bin', 'app.bin')
+      );
+      expect(downloadedApp.equals(payloadA)).toBe(true);
+    } finally {
+      await engine.destroyAll();
+      await new Promise<void>((resolve) => {
+        try {
+          seeder.destroy(() => resolve());
+        } catch {
+          resolve();
+        }
+      });
+    }
+  });
 });
 

@@ -169,7 +169,7 @@ export class DownloadManager {
     this.httpEngine = new HttpDownloadEngine(this.dlThrottle, this.logger, {
       electronNet: opts.electronNet,
     });
-    this.torrentEngine = new TorrentDownloadEngine(this.logger);
+    this.torrentEngine = new TorrentDownloadEngine(this.logger, this.torrentsCacheDir);
     this.socialDownloader = new SocialMediaDownloader(
       path.join(path.dirname(opts.stateFilePath), 'bin'),
       this.logger
@@ -1265,7 +1265,7 @@ export class DownloadManager {
       this.observedAggregatePeak = currentDlSpeed;
     }
 
-    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 18 : 80);
+    this.torrentEngine.setMaxConns(this.settings.gamingModeEnabled ? 28 : 120);
     this.networkBalancer.configure({
       enabled: this.settings.gamingModeEnabled,
       active: activeItems.length > 0,

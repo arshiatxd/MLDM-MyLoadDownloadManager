@@ -78,6 +78,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   const [alwaysUseDir, setAlwaysUseDir] = useState(false);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
+  const [probeRetryNonce, setProbeRetryNonce] = useState(0);
   const [selectedFileIndices, setSelectedFileIndices] = useState<number[]>([]);
   const [dirValidation, setDirValidation] = useState<DirectoryValidationResult | null>(null);
   const [checkingDir, setCheckingDir] = useState(false);
@@ -262,6 +263,7 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     settings.detectMultiPartEnabled,
     settings.multiPartDontAskAgain,
     settings.multiPartDefaultAction,
+    probeRetryNonce,
   ]);
 
   useEffect(() => {
@@ -752,8 +754,17 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             />
           ) : (
             probe?.warning && (
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/55 px-3 py-2 text-[11.5px] text-[var(--text-secondary)]">
-                {probe.warning}
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/55 px-3 py-2 text-[11.5px] text-[var(--text-secondary)]">
+                <span>{probe.warning}</span>
+                {detectedKind === 'torrent' && !probing && (
+                  <button
+                    type="button"
+                    onClick={() => setProbeRetryNonce((n) => n + 1)}
+                    className="shrink-0 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                  >
+                    Retry scan
+                  </button>
+                )}
               </div>
             )
           )}

@@ -61,10 +61,15 @@ declare module 'webtorrent' {
     files: WebTorrentFile[];
     wires: Array<{
       peerId?: string;
+      remoteAddress?: string;
+      remotePort?: number;
       downloaded?: number;
       uploaded?: number;
       peerPieces?: { get: (idx: number) => boolean };
     }>;
+    addPeer(peer: string): boolean;
+    select(start: number, end: number, priority?: number, notify?: () => void): void;
+    deselect(start: number, end: number): void;
     destroy(opts?: { destroyStore?: boolean }, cb?: (err?: Error | null) => void): void;
   }
 
@@ -72,6 +77,7 @@ declare module 'webtorrent' {
     downloadLimit?: number;
     uploadLimit?: number;
     maxConns?: number;
+    utp?: boolean;
     dht?: boolean | Record<string, unknown>;
     tracker?: boolean | Record<string, unknown>;
     lsd?: boolean;
@@ -82,11 +88,17 @@ declare module 'webtorrent' {
   export interface TorrentAddOptions {
     path?: string;
     deselect?: boolean;
+    skipVerify?: boolean;
+    storeCacheSlots?: number;
+    strategy?: 'rarest' | 'sequential';
+    uploads?: number | false;
+    maxWebConns?: number;
     announce?: string[];
   }
 
   export default class WebTorrent extends EventEmitter {
     torrents: WebTorrentTorrent[];
+    maxConns: number;
     destroyed: boolean;
     downloadSpeed: number;
     uploadSpeed: number;

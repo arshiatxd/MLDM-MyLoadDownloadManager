@@ -1,11 +1,13 @@
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import parseTorrent from 'parse-torrent';
 import type WebTorrent from 'webtorrent';
 import type { WebTorrentTorrent } from 'webtorrent';
-import { isMagnetUri, sanitizeFileName } from '../shared/constants';
+import { isHttpUrl, isMagnetUri, sanitizeFileName } from '../shared/constants';
 import type {
   DownloadItem,
   ProbeResult,
@@ -15,6 +17,142 @@ import type {
 import { formatDownloadError, validateSaveDirectory } from './fs-validation';
 import type { LogManager } from './logger';
 import { isPathInsideDir } from './security';
+
+export const DEFAULT_PUBLIC_TRACKERS: string[] = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://tracker.openbittorrent.com:6969/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://open.demonii.com:1337/announce',
+  'udp://explodie.org:6969/announce',
+  'udp://tracker.moeking.me:6969/announce',
+  'udp://tracker.dler.org:6969/announce',
+  'udp://opentracker.io:6969/announce',
+  'https://tracker.opentrackr.org:443/announce',
+  'https://tracker.tamersunion.org:443/announce',
+  'wss://tracker.openwebtorrent.com',
+  'wss://tracker.btorrent.xyz',
+];
+
+export function mergeTrackers(primary?: string[], extra: string[] = DEFAULT_PUBLIC_TRACKERS): string[] {
+  const merged = new Set<string>();
+  for (const tr of primary ?? []) {
+    const trimmed = (tr || '').trim();
+    if (trimmed) merged.add(trimmed);
+  }
+  for (const tr of extra) {
+    const trimmed = (tr || '').trim();
+    if (trimmed) merged.add(trimmed);
+  }
+  return [...merged];
+}
+
+export function extractMagnetPeerAddresses(rawUri: string): string[] {
+  if (!isMagnetUri(rawUri)) return [];
+  try {
+    const u = new URL(rawUri.trim());
+    return u.searchParams
+      .getAll('x.pe')
+      .map((p) => p.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function extractMagnetXsUrls(rawUri: string): string[] {
+  if (!isMagnetUri(rawUri)) return [];
+  try {
+    const u = new URL(rawUri.trim());
+    return u.searchParams
+      .getAll('xs')
+      .map((x) => x.trim())
+      .filter((x) => isHttpUrl(x));
+  } catch {
+    return [];
+  }
+}
+
+function fetchRawBufferWithTimeout(
+  targetUrl: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  redirectsLeft = 3
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Aborted'));
+      return;
+    }
+    if (!isHttpUrl(targetUrl)) {
+      reject(new Error('Unsafe URL'));
+      return;
+    }
+
+    const client = targetUrl.startsWith('https:') ? https : http;
+    const req = client.get(
+      targetUrl,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+          Accept: 'application/x-bittorrent, application/octet-stream, */*',
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          try {
+            const nextUrl = new URL(res.headers.location, targetUrl).toString();
+            fetchRawBufferWithTimeout(nextUrl, timeoutMs, signal, redirectsLeft - 1)
+              .then(resolve)
+              .catch(reject);
+          } catch (err) {
+            reject(err);
+          }
+          return;
+        }
+        if (status !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${status}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        res.on('data', (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > 12 * 1024 * 1024) {
+            req.destroy(new Error('Response too large'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      }
+    );
+
+    const onAbort = () => {
+      req.destroy(new Error('Aborted'));
+      reject(new Error('Aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    req.on('timeout', () => {
+      req.destroy(new Error('Timeout'));
+    });
+    req.on('error', (err) => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+    req.on('close', () => {
+      signal?.removeEventListener('abort', onAbort);
+    });
+  });
+}
 
 export interface TorrentRunOptions {
   keepSeedingAfterComplete: boolean;
@@ -108,7 +246,7 @@ export async function probeTorrentSource(rawSource: string): Promise<ProbeResult
       resumeSupported: true,
       category: 'torrents',
       infoHash: parsed.infoHash,
-      trackers: parsed.announce ?? [],
+      trackers: mergeTrackers(parsed.announce),
       files: [],
       warning: 'File list and exact size will load from peers after starting.',
     };
@@ -157,17 +295,73 @@ export function resolveTorrentTargetPath(
   return path.join(saveDir, sanitizeFileName(torrentName || fallbackName));
 }
 
+async function fetchPublicTorrentMetadataCache(
+  magnetUri: string,
+  infoHash: string,
+  cacheDir?: string,
+  signal?: AbortSignal
+): Promise<ProbeResult | null> {
+  const explicitPeers = extractMagnetPeerAddresses(magnetUri);
+  const allLocalPeers =
+    explicitPeers.length > 0 &&
+    explicitPeers.every((p) => /^(127\.0\.0\.1|localhost|\[::1\]):/i.test(p));
+  const xsUrls = extractMagnetXsUrls(magnetUri);
+  const upperHash = infoHash.toUpperCase();
+  const candidates = allLocalPeers
+    ? xsUrls
+    : [
+        ...xsUrls,
+        `https://itorrents.org/torrent/${upperHash}.torrent`,
+        `https://btcache.me/torrent/${upperHash}`,
+      ];
+  if (candidates.length === 0) return null;
+
+  const attempts = candidates.map(async (url): Promise<ProbeResult> => {
+    const buf = await fetchRawBufferWithTimeout(url, 6500, signal);
+    const parsed = await parseTorrentBuffer(buf, magnetUri);
+    if ((parsed.infoHash || '').trim().toLowerCase() !== infoHash) {
+      throw new Error('Mismatched infoHash');
+    }
+    if (!parsed.files || parsed.files.length === 0) {
+      throw new Error('No files in torrent buffer');
+    }
+    if (cacheDir) {
+      await saveTorrentBufferToCache(buf, cacheDir).catch(() => {});
+    }
+    return {
+      ...parsed,
+      source: magnetUri,
+      trackers: mergeTrackers(parsed.trackers),
+    };
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch {
+    return null;
+  }
+}
+
 export class TorrentDownloadEngine {
   private client: WebTorrent | null = null;
   private readonly logger: LogManager;
   private readonly active = new Map<string, ActiveTorrentEntry>();
+  private readonly activeProbes = new Map<string, Promise<ProbeResult>>();
+  private readonly activeProbeCancels = new Map<string, () => Promise<void>>();
+  private readonly warmPeers = new Map<string, Set<string>>();
+  private cacheDir: string | null = null;
   private dlLimit: number | null = null;
   private ulLimit: number | null = null;
-  private maxConns = 35;
+  private maxConns = 120;
   private idleDestroyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(logger: LogManager) {
+  constructor(logger: LogManager, cacheDir?: string) {
     this.logger = logger;
+    this.cacheDir = cacheDir ?? null;
+  }
+
+  setCacheDir(cacheDir: string): void {
+    this.cacheDir = cacheDir;
   }
 
   setLimits(dlBytesPerSec: number | null, ulBytesPerSec: number | null): void {
@@ -181,6 +375,212 @@ export class TorrentDownloadEngine {
 
   setMaxConns(maxConns: number): void {
     this.maxConns = maxConns;
+    if (this.client && !this.client.destroyed) {
+      this.client.maxConns = maxConns;
+    }
+  }
+
+  private pumpPeerQueue(torrent: WebTorrentTorrent, maxConns = this.maxConns): void {
+    const raw = torrent as unknown as {
+      destroyed?: boolean;
+      paused?: boolean;
+      _queue?: unknown[];
+      _numConns?: number;
+      _numPending?: number;
+      _drain?: () => void;
+      infoHash?: string;
+    };
+    if (!raw || raw.destroyed || raw.paused) return;
+
+    if (typeof raw._drain === 'function' && Array.isArray(raw._queue)) {
+      while (
+        raw._queue.length > 0 &&
+        (raw._numConns || 0) + (raw._numPending || 0) < maxConns
+      ) {
+        const before = raw._queue.length;
+        raw._drain();
+        if (raw._queue.length >= before) break;
+      }
+    }
+
+    const hash = (torrent.infoHash || '').trim().toLowerCase();
+    if (hash && Array.isArray(torrent.wires) && torrent.wires.length > 0) {
+      let set = this.warmPeers.get(hash);
+      if (!set) {
+        set = new Set<string>();
+        this.warmPeers.set(hash, set);
+      }
+      for (const wire of torrent.wires) {
+        if (wire?.remoteAddress && wire?.remotePort) {
+          set.add(`${wire.remoteAddress}:${wire.remotePort}`);
+        }
+      }
+    }
+  }
+
+  private injectKnownPeers(torrent: WebTorrentTorrent, infoHash: string, rawSource?: string): void {
+    if (torrent.destroyed) return;
+    const peers = new Set<string>();
+    const warm = infoHash ? this.warmPeers.get(infoHash) : undefined;
+    if (warm) {
+      for (const addr of warm) peers.add(addr);
+    }
+    if (rawSource) {
+      for (const addr of extractMagnetPeerAddresses(rawSource)) {
+        peers.add(addr);
+      }
+    }
+    if (peers.size === 0) return;
+
+    const applyPeers = () => {
+      if (torrent.destroyed) return;
+      for (const addr of peers) {
+        try {
+          torrent.addPeer(addr);
+        } catch {
+        }
+      }
+      this.pumpPeerQueue(torrent);
+    };
+
+    if (torrent.infoHash) {
+      applyPeers();
+    } else {
+      torrent.once('infoHash', applyPeers);
+    }
+  }
+
+  private attachFastPieceVerification(torrent: WebTorrentTorrent, saveDir: string): void {
+    const raw = torrent as unknown as {
+      destroyed?: boolean;
+      files?: Array<{ path: string; _startPiece?: number; _endPiece?: number }>;
+      pieces?: unknown[];
+      _hasStartupBitfield?: boolean;
+      _verifyPieces?: (cb: (err: Error | null) => void) => void;
+      _verifyPiecesUsingBitfield?: (cb: (err: Error | null) => void) => void;
+      _verifyPiecesUsingHash?: (pieces: number[], cb: (err: Error | null) => void) => void;
+      _startDiscovery?: () => void;
+    };
+    if (typeof raw._verifyPieces !== 'function') return;
+
+    raw._verifyPieces = (cb: (err: Error | null) => void) => {
+      if (raw.destroyed) {
+        cb(new Error('torrent is destroyed'));
+        return;
+      }
+      if (typeof raw._startDiscovery === 'function') {
+        try {
+          raw._startDiscovery();
+        } catch {
+        }
+      }
+      if (raw._hasStartupBitfield && typeof raw._verifyPiecesUsingBitfield === 'function') {
+        raw._verifyPiecesUsingBitfield(cb);
+        return;
+      }
+
+      const files = Array.isArray(raw.files) ? raw.files : [];
+      const piecesToVerify = new Set<number>();
+      for (const file of files) {
+        if (!file?.path) continue;
+        const fullPath = path.resolve(saveDir, file.path);
+        if (!isPathInsideDir(saveDir, fullPath)) continue;
+        try {
+          const st = fs.statSync(fullPath);
+          if (st.isFile() && st.size > 0) {
+            const start = typeof file._startPiece === 'number' ? file._startPiece : 0;
+            const end =
+              typeof file._endPiece === 'number'
+                ? file._endPiece
+                : Math.max(0, (raw.pieces?.length ?? 1) - 1);
+            for (let p = start; p <= end; p += 1) {
+              piecesToVerify.add(p);
+            }
+          }
+        } catch {
+        }
+      }
+
+      if (piecesToVerify.size === 0 || typeof raw._verifyPiecesUsingHash !== 'function') {
+        queueMicrotask(() => cb(null));
+        return;
+      }
+      raw._verifyPiecesUsingHash([...piecesToVerify], cb);
+    };
+  }
+
+  private applyFileSelections(
+    torrent: WebTorrentTorrent,
+    selectedIndices: Set<number> | null
+  ): void {
+    if (torrent.destroyed || !Array.isArray(torrent.files) || torrent.files.length === 0) {
+      return;
+    }
+    const totalPieces = torrent.pieces?.length ?? 0;
+    const allSelected =
+      selectedIndices === null || selectedIndices.size >= torrent.files.length;
+
+    if (allSelected) {
+      if (totalPieces > 0 && typeof torrent.select === 'function') {
+        try {
+          torrent.select(0, totalPieces - 1, 0);
+          return;
+        } catch {
+        }
+      }
+      for (const file of torrent.files) {
+        file.select();
+      }
+      return;
+    }
+
+    if (totalPieces > 0 && typeof torrent.deselect === 'function') {
+      try {
+        torrent.deselect(0, totalPieces - 1);
+      } catch {
+        for (const file of torrent.files) {
+          file.deselect();
+        }
+      }
+    } else {
+      for (const file of torrent.files) {
+        file.deselect();
+      }
+    }
+
+    const intervals: Array<[number, number]> = [];
+    torrent.files.forEach((file, idx) => {
+      if (!selectedIndices.has(idx) || file.length <= 0) return;
+      const rawFile = file as unknown as { _startPiece?: number; _endPiece?: number };
+      if (
+        typeof rawFile._startPiece === 'number' &&
+        typeof rawFile._endPiece === 'number'
+      ) {
+        intervals.push([rawFile._startPiece, rawFile._endPiece]);
+      } else {
+        file.select();
+      }
+    });
+
+    if (intervals.length > 0 && typeof torrent.select === 'function') {
+      intervals.sort((a, b) => a[0] - b[0]);
+      const merged: Array<[number, number]> = [intervals[0]];
+      for (let i = 1; i < intervals.length; i += 1) {
+        const prev = merged[merged.length - 1];
+        const cur = intervals[i];
+        if (cur[0] <= prev[1] + 1) {
+          prev[1] = Math.max(prev[1], cur[1]);
+        } else {
+          merged.push([cur[0], cur[1]]);
+        }
+      }
+      for (const [start, end] of merged) {
+        try {
+          torrent.select(start, end, 0);
+        } catch {
+        }
+      }
+    }
   }
 
   async start(item: DownloadItem, opts: TorrentRunOptions): Promise<void> {
@@ -197,11 +597,35 @@ export class TorrentDownloadEngine {
       await fs.promises.mkdir(item.saveDir, { recursive: true });
       const client = await this.ensureClient();
 
-      const cachedTorrentPath =
+      const sourceNorm = normalizeTorrentSource(item.source);
+      let expectedInfoHash = (item.torrent?.infoHash || '').trim().toLowerCase();
+      if (!expectedInfoHash && isMagnetUri(sourceNorm)) {
+        try {
+          const parsed = await parseTorrent(sourceNorm);
+          expectedInfoHash = (parsed.infoHash || '').trim().toLowerCase();
+        } catch {
+          expectedInfoHash = '';
+        }
+      }
+
+      if (expectedInfoHash) {
+        const cancelProbe = this.activeProbeCancels.get(expectedInfoHash);
+        if (cancelProbe) {
+          await cancelProbe().catch(() => {});
+        }
+      }
+
+      let cachedTorrentPath =
         item.torrent?.torrentFilePath && fs.existsSync(item.torrent.torrentFilePath)
           ? item.torrent.torrentFilePath
           : null;
-      const sourceNorm = normalizeTorrentSource(item.source);
+      if (!cachedTorrentPath && expectedInfoHash && this.cacheDir) {
+        const candidateCache = path.join(this.cacheDir, `${expectedInfoHash}.torrent`);
+        if (fs.existsSync(candidateCache)) {
+          cachedTorrentPath = candidateCache;
+        }
+      }
+
       let torrentInput: string | Buffer = sourceNorm;
       if (cachedTorrentPath) {
         torrentInput = await fs.promises.readFile(cachedTorrentPath);
@@ -224,7 +648,6 @@ export class TorrentDownloadEngine {
         return;
       }
 
-      let expectedInfoHash = (item.torrent?.infoHash || '').trim().toLowerCase();
       if (!expectedInfoHash) {
         try {
           const parsed = await parseTorrent(torrentInput);
@@ -255,6 +678,7 @@ export class TorrentDownloadEngine {
       }
 
       const hasPartialSelection = selectedIndices !== null && selectedIndices.size < savedFiles.length;
+      const mergedAnnounce = mergeTrackers(item.torrent?.trackers);
 
       this.logger.info('Torrent', `Starting ${item.name}`, item.id);
       opts.onProgress({
@@ -265,17 +689,40 @@ export class TorrentDownloadEngine {
       const torrent = client.add(torrentInput, {
         path: item.saveDir,
         deselect: hasPartialSelection,
+        strategy: 'rarest',
+        storeCacheSlots: 64,
+        uploads: 20,
+        maxWebConns: 8,
+        announce: mergedAnnounce,
       });
+
+      this.attachFastPieceVerification(torrent, item.saveDir);
+      this.injectKnownPeers(
+        torrent,
+        expectedInfoHash,
+        isMagnetUri(sourceNorm) ? sourceNorm : item.torrent?.magnetUri
+      );
 
       const entry: ActiveTorrentEntry = {
         torrent,
-        pollTimer: setInterval(() => this.emitSnapshot(item, entry, opts), 450),
+        pollTimer: setInterval(() => {
+          this.pumpPeerQueue(torrent);
+          this.emitSnapshot(item, entry, opts);
+        }, 350),
         selectedIndices,
         completionFired: item.status === 'seeding',
         stopping: false,
       };
 
       this.active.set(item.id, entry);
+
+      torrent.on('peer', () => {
+        if (!entry.stopping) this.pumpPeerQueue(torrent);
+      });
+
+      torrent.on('wire', () => {
+        if (!entry.stopping) this.pumpPeerQueue(torrent);
+      });
 
       torrent.on('warning', (err) => {
         if (entry.stopping) return;
@@ -289,6 +736,20 @@ export class TorrentDownloadEngine {
         this.logger.error('Torrent', `Error in ${item.name}: ${msg}`, item.id);
         this.cleanupEntry(item.id);
         opts.onError(msg);
+      });
+
+      torrent.once('metadata', () => {
+        if (entry.stopping || torrent.destroyed) return;
+        if (!cachedTorrentPath && this.cacheDir && torrent.torrentFile) {
+          void saveTorrentBufferToCache(Buffer.from(torrent.torrentFile), this.cacheDir)
+            .then((saved) => {
+              if (item.torrent) {
+                item.torrent.torrentFilePath = saved.filePath;
+              }
+            })
+            .catch(() => {});
+        }
+        this.emitSnapshot(item, entry, opts);
       });
 
       torrent.once('ready', () => {
@@ -328,14 +789,7 @@ export class TorrentDownloadEngine {
           });
         }
 
-        torrent.files.forEach((file, idx) => {
-          const wanted = entry.selectedIndices === null || entry.selectedIndices.has(idx);
-          if (wanted) {
-            file.select();
-          } else {
-            file.deselect();
-          }
-        });
+        this.applyFileSelections(torrent, entry.selectedIndices);
 
         this.logger.info(
           'Torrent',
@@ -363,13 +817,7 @@ export class TorrentDownloadEngine {
 
     const wantedSet = new Set(selectedIndices);
     entry.selectedIndices = wantedSet;
-    entry.torrent.files.forEach((file, idx) => {
-      if (wantedSet.has(idx)) {
-        file.select();
-      } else {
-        file.deselect();
-      }
-    });
+    this.applyFileSelections(entry.torrent, wantedSet);
   }
 
   async pause(id: string): Promise<void> {
@@ -387,34 +835,74 @@ export class TorrentDownloadEngine {
   async probeMagnetMetadata(
     magnetUri: string,
     cacheDir?: string,
-    timeoutMs = 15000
+    timeoutMs = 22000
   ): Promise<ProbeResult> {
+    const effectiveCacheDir = cacheDir ?? this.cacheDir ?? undefined;
     const basic = await probeTorrentSource(magnetUri);
     const infoHash = (basic.infoHash || '').trim().toLowerCase();
     if (!infoHash) return basic;
 
-    if (cacheDir) {
-      const cachedPath = path.join(cacheDir, `${infoHash}.torrent`);
+    if (effectiveCacheDir) {
+      const cachedPath = path.join(effectiveCacheDir, `${infoHash}.torrent`);
       if (fs.existsSync(cachedPath)) {
         try {
           const buf = await fs.promises.readFile(cachedPath);
           const parsedCached = await parseTorrentBuffer(buf, magnetUri);
           if (parsedCached.files && parsedCached.files.length > 0) {
-            return parsedCached;
+            return {
+              ...parsedCached,
+              source: magnetUri,
+              trackers: mergeTrackers(parsedCached.trackers, basic.trackers),
+            };
           }
         } catch {
         }
       }
     }
 
+    const existingPromise = this.activeProbes.get(infoHash);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const probePromise = this.runMagnetMetadataProbe(
+      magnetUri,
+      basic,
+      infoHash,
+      effectiveCacheDir,
+      timeoutMs
+    );
+    this.activeProbes.set(infoHash, probePromise);
+    try {
+      return await probePromise;
+    } finally {
+      this.activeProbes.delete(infoHash);
+      this.activeProbeCancels.delete(infoHash);
+    }
+  }
+
+  private async runMagnetMetadataProbe(
+    magnetUri: string,
+    basic: ProbeResult,
+    infoHash: string,
+    cacheDir: string | undefined,
+    timeoutMs: number
+  ): Promise<ProbeResult> {
     const metaTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'myload-meta-'));
     const { default: WebTorrentCtor } = await import('webtorrent');
     const tempClient = new WebTorrentCtor({
-      downloadLimit: 0,
-      uploadLimit: 0,
-      maxConns: 25,
+      downloadLimit: -1,
+      uploadLimit: -1,
+      maxConns: 60,
+      utp: false,
+      tracker: {
+        announce: DEFAULT_PUBLIC_TRACKERS,
+      },
     });
     tempClient.on('error', () => {});
+
+    const httpAbort = new AbortController();
+    let pumpTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
       const result = await new Promise<ProbeResult>((resolve) => {
@@ -423,8 +911,17 @@ export class TorrentDownloadEngine {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          if (pumpTimer) {
+            clearInterval(pumpTimer);
+            pumpTimer = null;
+          }
+          httpAbort.abort();
           resolve(probe);
         };
+
+        this.activeProbeCancels.set(infoHash, async () => {
+          finish(basic);
+        });
 
         const timer = setTimeout(() => {
           finish({
@@ -433,17 +930,50 @@ export class TorrentDownloadEngine {
           });
         }, timeoutMs);
 
+        void fetchPublicTorrentMetadataCache(
+          magnetUri,
+          infoHash,
+          cacheDir,
+          httpAbort.signal
+        ).then((httpCached) => {
+          if (httpCached && httpCached.files && httpCached.files.length > 0) {
+            finish(httpCached);
+          }
+        });
+
+        const mergedTrackers = mergeTrackers(basic.trackers);
         const torrent = tempClient.add(magnetUri, {
           path: metaTmpDir,
           deselect: true,
+          skipVerify: true,
+          storeCacheSlots: 0,
+          announce: mergedTrackers,
+        });
+
+        this.attachFastPieceVerification(torrent, metaTmpDir);
+        this.injectKnownPeers(torrent, infoHash, magnetUri);
+
+        pumpTimer = setInterval(() => {
+          if (!settled && !torrent.destroyed) {
+            this.pumpPeerQueue(torrent, 60);
+          }
+        }, 180);
+
+        torrent.on('peer', () => {
+          if (!settled) this.pumpPeerQueue(torrent, 60);
+        });
+
+        torrent.on('wire', () => {
+          if (!settled) this.pumpPeerQueue(torrent, 60);
         });
 
         torrent.on('error', () => {
-          finish(basic);
+          if (!settled) finish(basic);
         });
 
         const extractFromTorrent = async () => {
           if (settled || torrent.destroyed) return;
+          this.pumpPeerQueue(torrent, 60);
           const tBuf = torrent.torrentFile ? Buffer.from(torrent.torrentFile) : null;
           if (tBuf && tBuf.length > 0 && cacheDir) {
             try {
@@ -481,7 +1011,7 @@ export class TorrentDownloadEngine {
             resumeSupported: true,
             category: 'torrents',
             infoHash: torrent.infoHash || basic.infoHash,
-            trackers: torrent.announce?.length ? torrent.announce : basic.trackers,
+            trackers: mergeTrackers(torrent.announce, basic.trackers),
             files,
           });
         };
@@ -496,6 +1026,10 @@ export class TorrentDownloadEngine {
 
       return result;
     } finally {
+      if (pumpTimer) {
+        clearInterval(pumpTimer);
+      }
+      httpAbort.abort();
       await new Promise<void>((resolve) => {
         try {
           tempClient.destroy(() => resolve());
@@ -509,6 +1043,10 @@ export class TorrentDownloadEngine {
 
   async destroyAll(): Promise<void> {
     this.cancelIdleDestroy();
+    for (const cancel of this.activeProbeCancels.values()) {
+      await cancel().catch(() => {});
+    }
+    this.activeProbeCancels.clear();
     const ids = [...this.active.keys()];
     await Promise.all(ids.map((id) => this.stopTorrent(id, false)));
     if (this.client && !this.client.destroyed) {
@@ -526,6 +1064,10 @@ export class TorrentDownloadEngine {
         downloadLimit: this.dlLimit ?? -1,
         uploadLimit: this.ulLimit ?? -1,
         maxConns: this.maxConns,
+        utp: false,
+        tracker: {
+          announce: DEFAULT_PUBLIC_TRACKERS,
+        },
       });
       this.client.on('error', (err) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -551,7 +1093,8 @@ export class TorrentDownloadEngine {
         this.client = null;
         client.destroy(() => {});
       }
-    }, 10000);
+    }, 180000);
+    this.idleDestroyTimer.unref?.();
   }
 
   private emitSnapshot(

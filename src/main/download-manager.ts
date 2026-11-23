@@ -160,7 +160,7 @@ export class DownloadManager {
     this.torrentsCacheDir = path.join(this.stateDir, 'torrents');
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.14';
+    this.appVersion = opts.appVersion ?? '1.0.141';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);

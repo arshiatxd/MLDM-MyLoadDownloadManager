@@ -213,7 +213,7 @@ export class BrowserBridgeServer {
       this.sendJson(res, 200, {
         ok: true,
         app: 'MyLoad',
-        version: '1.0.14',
+        version: '1.0.141',
         ...health,
       });
       return;

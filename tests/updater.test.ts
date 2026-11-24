@@ -39,6 +39,9 @@ describe('GitHub UpdateService & semver utilities', () => {
     expect(compareSemver('1.0.151', '1.0.15')).toBe(1);
     expect(compareSemver('1.0.151', '1.0.16')).toBe(-1);
     expect(compareSemver('1.0.10', '1.0.9')).toBe(1);
+    expect(compareSemver('v.1.0.15', '1.0.15')).toBe(0);
+    expect(compareSemver('v.1.0.15', '1.0.141')).toBe(1);
+    expect(compareSemver('v.1.0.15', '1.0.14')).toBe(1);
 
     const picked = selectWindowsInstallerAsset([
       { name: 'MyLoad-Installer-1.1.0-x64.__uninstaller.exe', browser_download_url: 'https://github.com/u.exe' },

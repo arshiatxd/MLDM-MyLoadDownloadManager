@@ -35,8 +35,12 @@ const ALLOWED_GITHUB_HOSTS = new Set([
   'uploads.github.com',
 ]);
 
+function normalizeVersionTag(raw: string): string {
+  return raw.trim().replace(/^v\.?\s*/i, '');
+}
+
 function parseSemverParts(raw: string): { core: [number, number, number, number]; pre: string } {
-  const cleaned = raw.trim().replace(/^v/i, '');
+  const cleaned = normalizeVersionTag(raw);
   const hyphenIdx = cleaned.indexOf('-');
   const coreStr = hyphenIdx >= 0 ? cleaned.slice(0, hyphenIdx) : cleaned;
   const pre = hyphenIdx >= 0 ? cleaned.slice(hyphenIdx + 1) : '';
@@ -254,7 +258,7 @@ export class UpdateService {
         });
       }
 
-      const latestVersion = rawTag.replace(/^v/i, '');
+      const latestVersion = normalizeVersionTag(rawTag);
       const releaseUrl =
         payload.html_url && this.isAllowedUrl(payload.html_url)
           ? payload.html_url

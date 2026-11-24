@@ -160,7 +160,7 @@ export class DownloadManager {
     this.torrentsCacheDir = path.join(this.stateDir, 'torrents');
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
-    this.appVersion = opts.appVersion ?? '1.0.141';
+    this.appVersion = opts.appVersion ?? '1.0.15';
     this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
@@ -520,11 +520,27 @@ export class DownloadManager {
 
   async addBatchDownloads(
     reqs: AddDownloadRequest[],
-    queueModeOverride?: QueueMode
+    queueModeOverride?: QueueMode,
+    maxConcurrentOverride?: number
   ): Promise<DownloadItem[]> {
+    let settingsChanged = false;
     if (queueModeOverride && queueModeOverride !== this.settings.queueMode) {
       this.settings.queueMode = queueModeOverride;
+      settingsChanged = true;
+    }
+    if (
+      typeof maxConcurrentOverride === 'number' &&
+      Number.isFinite(maxConcurrentOverride)
+    ) {
+      const clamped = Math.min(10, Math.max(1, Math.round(maxConcurrentOverride)));
+      if (clamped !== this.settings.maxConcurrentDownloads) {
+        this.settings.maxConcurrentDownloads = clamped;
+        settingsChanged = true;
+      }
+    }
+    if (settingsChanged) {
       this.callbacks.onSettingsUpdated?.({ ...this.settings });
+      void this.store.save(this.downloads, this.settings);
     }
     const created: DownloadItem[] = [];
     for (let i = 0; i < reqs.length; i += 1) {
@@ -847,7 +863,14 @@ export class DownloadManager {
         ? normalizeFilterTabOrder(patch.filterTabOrder)
         : this.settings.filterTabOrder,
     };
+    next.maxConcurrentDownloads = Number.isFinite(next.maxConcurrentDownloads)
+      ? Math.min(10, Math.max(1, Math.round(next.maxConcurrentDownloads)))
+      : this.settings.maxConcurrentDownloads;
+    next.httpConnections = Number.isFinite(next.httpConnections)
+      ? Math.min(32, Math.max(1, Math.round(next.httpConnections)))
+      : this.settings.httpConnections;
 
+    const prevSequential = this.settings.torrentSequentialDownload;
     const prevWatch = this.settings.watchClipboard;
     const prevBridgeEnabled = this.settings.browserBridgeEnabled;
     const prevBridgePort = this.settings.browserBridgePort;
@@ -861,6 +884,9 @@ export class DownloadManager {
     this.settings = next;
 
     this.applyThrottleSettings();
+    if (prevSequential !== next.torrentSequentialDownload) {
+      this.torrentEngine.setSequentialDownload(next.torrentSequentialDownload);
+    }
     if (throttleChanged) {
       this.scheduleRunningMediaLimitSync();
     }
@@ -1128,6 +1154,7 @@ export class DownloadManager {
     item.status = 'downloading';
     void this.torrentEngine.start(item, {
       keepSeedingAfterComplete: this.settings.keepSeedingAfterComplete,
+      sequentialDownload: this.settings.torrentSequentialDownload,
       onProgress: (patch) => {
         Object.assign(item, patch);
         this.scheduleEmit();

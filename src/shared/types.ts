@@ -250,6 +250,7 @@ export interface AppSettings {
 
   keepSeedingAfterComplete: boolean;
   torrentAnonymousMode: boolean;
+  torrentSequentialDownload: boolean;
   minimizeToTray: boolean;
   autoResumeOnStart: boolean;
   desktopNotifications: boolean;
@@ -370,6 +371,7 @@ export type UpdateState =
   | 'up-to-date'
   | 'available'
   | 'downloading'
+  | 'paused'
   | 'downloaded'
   | 'error';
 
@@ -425,7 +427,11 @@ export interface MyLoadApi {
   getDiskSpace: (dirPath: string) => Promise<DiskSpaceInfo | null>;
   validateDirectory: (dirPath: string, requiredBytes?: number | null) => Promise<DirectoryValidationResult>;
   addDownload: (req: AddDownloadRequest) => Promise<DownloadItem>;
-  addBatchDownloads: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) => Promise<DownloadItem[]>;
+  addBatchDownloads: (
+    reqs: AddDownloadRequest[],
+    queueModeOverride?: QueueMode,
+    maxConcurrentOverride?: number
+  ) => Promise<DownloadItem[]>;
   addSocialDownload: (req: SocialDownloadRequest) => Promise<DownloadItem[]>;
   scanMultiParts: (
     url: string,
@@ -459,6 +465,9 @@ export interface MyLoadApi {
   getUpdateStatus: () => Promise<UpdateStatus>;
   checkForUpdates: () => Promise<UpdateStatus>;
   downloadAndInstallUpdate: () => Promise<UpdateStatus>;
+  pauseUpdateDownload: () => Promise<UpdateStatus>;
+  resumeUpdateDownload: () => Promise<UpdateStatus>;
+  cancelUpdateDownload: () => Promise<UpdateStatus>;
   openUpdateReleasePage: () => Promise<void>;
   selectFolder: (defaultPath?: string) => Promise<string | null>;
   selectTorrentFile: () => Promise<string | null>;

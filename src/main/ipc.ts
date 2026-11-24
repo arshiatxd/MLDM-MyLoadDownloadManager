@@ -72,8 +72,12 @@ export function registerIpcHandlers(params: {
   );
   ipcMain.handle(
     'myload:add-batch-downloads',
-    (_e, reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) =>
-      manager.addBatchDownloads(reqs, queueModeOverride)
+    (
+      _e,
+      reqs: AddDownloadRequest[],
+      queueModeOverride?: QueueMode,
+      maxConcurrentOverride?: number
+    ) => manager.addBatchDownloads(reqs, queueModeOverride, maxConcurrentOverride)
   );
   ipcMain.handle('myload:add-social-download', (_e, req: SocialDownloadRequest) =>
     manager.addSocialDownload(req)
@@ -202,6 +206,9 @@ export function registerIpcHandlers(params: {
     await shell.openExternal(updater.getReleasePageUrl());
     return current;
   });
+  ipcMain.handle('myload:pause-update', () => updater.pauseUpdateDownload());
+  ipcMain.handle('myload:resume-update', () => updater.resumeUpdateDownload());
+  ipcMain.handle('myload:cancel-update', () => updater.cancelUpdateDownload());
   ipcMain.handle('myload:open-update-page', async () => {
     await shell.openExternal(updater.getReleasePageUrl());
   });

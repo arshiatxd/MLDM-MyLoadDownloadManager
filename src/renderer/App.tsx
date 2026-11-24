@@ -349,6 +349,7 @@ export function App() {
 
   const showUpdateBanner =
     updateStatus.state === 'downloading' ||
+    updateStatus.state === 'paused' ||
     updateStatus.state === 'downloaded' ||
     (updateStatus.state === 'available' &&
       !updatePromptDismissed &&
@@ -580,9 +581,14 @@ export function App() {
 
   const handleAddBatchConfirm = async (
     reqs: AddDownloadRequest[],
-    queueModeOverride?: QueueMode
+    queueModeOverride?: QueueMode,
+    maxConcurrentOverride?: number
   ) => {
-    const created = await window.myload.addBatchDownloads(reqs, queueModeOverride);
+    const created = await window.myload.addBatchDownloads(
+      reqs,
+      queueModeOverride,
+      maxConcurrentOverride
+    );
     if (created[0]) {
       setFocusedId(created[0].id);
     }
@@ -723,6 +729,9 @@ export function App() {
         <UpdateBanner
           status={updateStatus}
           onUpdateNow={() => void window.myload.downloadAndInstallUpdate()}
+          onPauseUpdate={() => void window.myload.pauseUpdateDownload()}
+          onResumeUpdate={() => void window.myload.resumeUpdateDownload()}
+          onCancelUpdate={() => void window.myload.cancelUpdateDownload()}
           onOpenRelease={() => void window.myload.openUpdateReleasePage()}
           onDismiss={(dontShowAgain) => {
             setUpdatePromptDismissed(true);

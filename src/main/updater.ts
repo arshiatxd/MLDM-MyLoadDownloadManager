@@ -101,6 +101,13 @@ export function selectWindowsInstallerAsset(
   return exeAssets.find((a) => /installer/i.test(a.name)) ?? exeAssets[0];
 }
 
+class UpdateControlError extends Error {
+  constructor(public readonly action: 'pause' | 'cancel') {
+    super(`Update download ${action}`);
+    this.name = 'UpdateControlError';
+  }
+}
+
 export class UpdateService {
   private readonly currentVersion: string;
   private readonly downloadDir: string;
@@ -113,6 +120,9 @@ export class UpdateService {
   private status: UpdateStatus;
   private checkingPromise: Promise<UpdateStatus> | null = null;
   private downloadingPromise: Promise<UpdateStatus> | null = null;
+  private activeAbort: ((action: 'pause' | 'cancel') => void) | null = null;
+  private activePartPath: string | null = null;
+  private pendingControlAction: 'pause' | 'cancel' | null = null;
 
   constructor(opts: {
     currentVersion: string;
@@ -123,7 +133,7 @@ export class UpdateService {
     onStatusChanged?: (status: UpdateStatus) => void;
     onLaunchInstaller?: (filePath: string) => Promise<void> | void;
   }) {
-    this.currentVersion = opts.currentVersion || '1.0.141';
+    this.currentVersion = opts.currentVersion || '1.0.15';
     this.downloadDir = opts.downloadDir || path.join(os.tmpdir(), 'MyLoad-Updates');
     this.apiUrl = opts.apiUrl || DEFAULT_API_URL;
     this.fallbackReleaseUrl = opts.fallbackReleaseUrl || DEFAULT_RELEASE_URL;
@@ -282,6 +292,75 @@ export class UpdateService {
     }
   }
 
+  private getInstallerPaths(): { finalPath: string; partPath: string } {
+    const safeName = sanitizeFileName(
+      this.status.installerName || `MyLoad-Installer-${this.status.latestVersion || 'latest'}.exe`
+    );
+    const finalPath = path.join(this.downloadDir, safeName);
+    return { finalPath, partPath: `${finalPath}.part` };
+  }
+
+  private buildAvailableStatus(): UpdateStatus {
+    return {
+      state: 'available',
+      currentVersion: this.currentVersion,
+      latestVersion: this.status.latestVersion,
+      releaseName: this.status.releaseName,
+      releaseNotes: this.status.releaseNotes,
+      releaseUrl: this.status.releaseUrl,
+      publishedAt: this.status.publishedAt,
+      installerName: this.status.installerName,
+      installerUrl: this.status.installerUrl,
+      installerSize: this.status.installerSize,
+      checkedAt: this.status.checkedAt,
+    };
+  }
+
+  private computeProgress(downloaded: number, total: number | null): number | undefined {
+    return total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : undefined;
+  }
+
+  async pauseUpdateDownload(): Promise<UpdateStatus> {
+    if (this.status.state !== 'downloading' || !this.downloadingPromise) {
+      return this.getStatus();
+    }
+    if (this.pendingControlAction !== 'cancel') {
+      this.pendingControlAction = 'pause';
+      this.activeAbort?.('pause');
+    }
+    await this.downloadingPromise.catch(() => {});
+    return this.getStatus();
+  }
+
+  async resumeUpdateDownload(): Promise<UpdateStatus> {
+    if (this.downloadingPromise) {
+      return this.downloadingPromise;
+    }
+    if (this.status.state === 'paused' || this.status.state === 'available') {
+      return this.downloadAndInstallUpdate();
+    }
+    return this.getStatus();
+  }
+
+  async cancelUpdateDownload(): Promise<UpdateStatus> {
+    if (this.status.state !== 'downloading' && this.status.state !== 'paused') {
+      return this.getStatus();
+    }
+    if (this.downloadingPromise) {
+      this.pendingControlAction = 'cancel';
+      this.activeAbort?.('cancel');
+      await this.downloadingPromise.catch(() => {});
+    }
+    const { partPath } = this.getInstallerPaths();
+    const toDelete = this.activePartPath || partPath;
+    this.activePartPath = null;
+    await fs.promises.rm(toDelete, { force: true }).catch(() => {});
+    if (this.getStatus().state !== 'available') {
+      return this.setStatus(this.buildAvailableStatus());
+    }
+    return this.getStatus();
+  }
+
   async downloadAndInstallUpdate(): Promise<UpdateStatus> {
     if (this.downloadingPromise) return this.downloadingPromise;
 
@@ -322,34 +401,51 @@ export class UpdateService {
       });
     }
 
-    const safeName = sanitizeFileName(
-      this.status.installerName || `MyLoad-Installer-${this.status.latestVersion || 'latest'}.exe`
-    );
+    const isResuming = this.status.state === 'paused';
+    const { finalPath, partPath } = this.getInstallerPaths();
     await fs.promises.mkdir(this.downloadDir, { recursive: true });
-    const finalPath = path.join(this.downloadDir, safeName);
-    const partPath = `${finalPath}.part`;
+    this.activePartPath = partPath;
+    this.pendingControlAction = null;
 
+    let resumeOffset = 0;
+    if (isResuming) {
+      try {
+        const st = await fs.promises.stat(partPath);
+        if (st.isFile() && st.size > 0) {
+          resumeOffset = st.size;
+        }
+      } catch {
+        resumeOffset = 0;
+      }
+    } else {
+      await fs.promises.rm(partPath, { force: true }).catch(() => {});
+    }
+
+    const initialTotal = this.status.totalBytes ?? this.status.installerSize ?? null;
     this.setStatus({
       ...this.status,
       state: 'downloading',
-      downloadedBytes: 0,
-      totalBytes: this.status.installerSize ?? null,
-      progress: 0,
+      downloadedBytes: resumeOffset,
+      totalBytes: initialTotal,
+      progress: this.computeProgress(resumeOffset, initialTotal) ?? 0,
       error: undefined,
     });
 
     try {
-      await this.downloadToFile(installerUrl, partPath, 6, (downloaded, total) => {
-        const pct = total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : undefined;
+      if (this.pendingControlAction) {
+        throw new UpdateControlError(this.pendingControlAction);
+      }
+      await this.downloadToFile(installerUrl, partPath, 6, resumeOffset, (downloaded, total) => {
         this.setStatus({
           ...this.status,
           state: 'downloading',
           downloadedBytes: downloaded,
           totalBytes: total,
-          progress: pct,
+          progress: this.computeProgress(downloaded, total),
         });
       });
 
+      this.activePartPath = null;
       await fs.promises.rm(finalPath, { force: true }).catch(() => {});
       await fs.promises.rename(partPath, finalPath);
 
@@ -363,12 +459,45 @@ export class UpdateService {
       await this.onLaunchInstaller?.(finalPath);
       return readyStatus;
     } catch (err) {
+      const controlAction =
+        err instanceof UpdateControlError ? err.action : this.pendingControlAction;
+      this.pendingControlAction = null;
+
+      if (controlAction === 'pause') {
+        let diskBytes = this.status.downloadedBytes ?? resumeOffset;
+        try {
+          const st = await fs.promises.stat(partPath);
+          if (st.isFile()) {
+            diskBytes = st.size;
+          }
+        } catch {
+        }
+        const total = this.status.totalBytes ?? this.status.installerSize ?? null;
+        return this.setStatus({
+          ...this.status,
+          state: 'paused',
+          downloadedBytes: diskBytes,
+          totalBytes: total,
+          progress: this.computeProgress(diskBytes, total),
+          error: undefined,
+        });
+      }
+
+      this.activePartPath = null;
       await fs.promises.rm(partPath, { force: true }).catch(() => {});
+
+      if (controlAction === 'cancel') {
+        return this.setStatus(this.buildAvailableStatus());
+      }
+
       return this.setStatus({
         ...this.status,
         state: 'error',
         error: err instanceof Error ? err.message : 'Failed to download update installer',
       });
+    } finally {
+      this.pendingControlAction = null;
+      this.activeAbort = null;
     }
   }
 
@@ -439,27 +568,95 @@ export class UpdateService {
     targetUrl: string,
     destPath: string,
     redirectsLeft: number,
+    resumeOffset: number,
     onProgress: (downloaded: number, total: number | null) => void
   ): Promise<void> {
     if (!this.isAllowedUrl(targetUrl)) {
       return Promise.reject(new Error('Disallowed update asset URL'));
     }
 
+    if (this.pendingControlAction) {
+      return Promise.reject(new UpdateControlError(this.pendingControlAction));
+    }
+
     return new Promise((resolve, reject) => {
       const parsed = new URL(targetUrl);
       const client = parsed.protocol === 'https:' ? https : http;
+      const headers: Record<string, string> = {
+        Accept: 'application/octet-stream',
+        'User-Agent': `MyLoad/${this.currentVersion}`,
+      };
+      if (resumeOffset > 0) {
+        headers.Range = `bytes=${resumeOffset}-`;
+      }
+
+      let settled = false;
+      let activeRes: http.IncomingMessage | null = null;
+      let out: fs.WriteStream | null = null;
+      let outClosed = true;
+
+      const closeOutStream = (mode: 'end' | 'destroy'): Promise<void> =>
+        new Promise((done) => {
+          if (!out || outClosed) {
+            done();
+            return;
+          }
+          out.once('close', () => done());
+          if (mode === 'end') {
+            out.end();
+          } else {
+            out.destroy();
+          }
+        });
+
+      const settleReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        this.activeAbort = null;
+        reject(err);
+      };
+
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        this.activeAbort = null;
+        resolve();
+      };
+
+      const abortHandler = (action: 'pause' | 'cancel') => {
+        if (settled) return;
+        settled = true;
+        this.activeAbort = null;
+        try {
+          activeRes?.destroy();
+        } catch {
+        }
+        try {
+          req.destroy();
+        } catch {
+        }
+        void closeOutStream(action === 'pause' ? 'end' : 'destroy').then(() => {
+          reject(new UpdateControlError(action));
+        });
+      };
+
+      this.activeAbort = abortHandler;
+
       const req = client.request(
         parsed,
         {
           method: 'GET',
-          headers: {
-            Accept: 'application/octet-stream',
-            'User-Agent': `MyLoad/${this.currentVersion}`,
-          },
+          headers,
           timeout: 30000,
         },
         (res) => {
+          if (settled) {
+            res.resume();
+            return;
+          }
+          activeRes = res;
           const code = res.statusCode ?? 0;
+
           if (
             code >= 300 &&
             code < 400 &&
@@ -468,40 +665,107 @@ export class UpdateService {
           ) {
             res.resume();
             const nextUrl = new URL(res.headers.location, parsed).toString();
-            void this.downloadToFile(nextUrl, destPath, redirectsLeft - 1, onProgress).then(
+            this.activeAbort = null;
+            if (settled) return;
+            settled = true;
+            void this.downloadToFile(nextUrl, destPath, redirectsLeft - 1, resumeOffset, onProgress).then(
               resolve,
               reject
             );
             return;
           }
 
+          if (code === 416 && resumeOffset > 0) {
+            res.resume();
+            const knownTotal = this.status.totalBytes ?? this.status.installerSize ?? null;
+            const rangeMatch =
+              typeof res.headers['content-range'] === 'string'
+                ? res.headers['content-range'].match(/^bytes\s+\*\/(\d+)$/i)
+                : null;
+            const serverTotal = rangeMatch ? Number(rangeMatch[1]) : knownTotal;
+            if (serverTotal && serverTotal > 0 && resumeOffset >= serverTotal) {
+              settleResolve();
+              return;
+            }
+            this.activeAbort = null;
+            if (settled) return;
+            settled = true;
+            void fs.promises
+              .rm(destPath, { force: true })
+              .catch(() => {})
+              .then(() => this.downloadToFile(targetUrl, destPath, redirectsLeft, 0, onProgress))
+              .then(resolve, reject);
+            return;
+          }
+
           if (code < 200 || code >= 300) {
             res.resume();
-            reject(new Error(`Installer download failed (HTTP ${code})`));
+            settleReject(new Error(`Installer download failed (HTTP ${code})`));
             return;
           }
 
           const rawLen = res.headers['content-length'];
-          const totalBytes = rawLen && /^\d+$/.test(rawLen) ? Number(rawLen) : this.status.installerSize ?? null;
-          let downloaded = 0;
-          let lastEmit = 0;
-          let settled = false;
+          const contentLength = rawLen && /^\d+$/.test(rawLen) ? Number(rawLen) : null;
+          let isPartialAppend = false;
+          let startOffset = 0;
+          let totalBytes: number | null = this.status.installerSize ?? null;
 
-          const out = fs.createWriteStream(destPath);
+          if (code === 206 && resumeOffset > 0) {
+            const contentRange =
+              typeof res.headers['content-range'] === 'string' ? res.headers['content-range'] : '';
+            const rangeMatch = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+            const parsedStart = rangeMatch ? Number(rangeMatch[1]) : resumeOffset;
+            if (parsedStart === resumeOffset) {
+              isPartialAppend = true;
+              startOffset = resumeOffset;
+              if (rangeMatch && rangeMatch[3] !== '*') {
+                totalBytes = Number(rangeMatch[3]);
+              } else if (contentLength !== null) {
+                totalBytes = resumeOffset + contentLength;
+              }
+            }
+          }
+
+          if (!isPartialAppend) {
+            startOffset = 0;
+            if (contentLength !== null) {
+              totalBytes = contentLength;
+            }
+          }
+
+          let downloaded = startOffset;
+          let lastEmit = 0;
+
+          const stream = fs.createWriteStream(destPath, {
+            flags: isPartialAppend ? 'a' : 'w',
+          });
+          out = stream;
+          outClosed = false;
+          stream.on('close', () => {
+            outClosed = true;
+          });
+
           const fail = async (err: Error) => {
             if (settled) return;
             settled = true;
-            res.destroy();
-            await new Promise<void>((r) => out.close(() => r()));
+            this.activeAbort = null;
+            try {
+              res.destroy();
+            } catch {
+            }
+            await closeOutStream('destroy');
             reject(err);
           };
 
           res.on('data', (chunk: Buffer) => {
+            if (settled) return;
             downloaded += chunk.length;
-            const okWrite = out.write(chunk);
+            const okWrite = stream.write(chunk);
             if (!okWrite) {
               res.pause();
-              out.once('drain', () => res.resume());
+              stream.once('drain', () => {
+                if (!settled) res.resume();
+              });
             }
             const now = Date.now();
             if (now - lastEmit >= 150) {
@@ -514,36 +778,50 @@ export class UpdateService {
             void fail(err instanceof Error ? err : new Error('Network error during update download'));
           });
 
-          out.on('error', (err) => {
+          stream.on('error', (err) => {
             void fail(err instanceof Error ? err : new Error('Disk write error during update download'));
           });
 
           res.on('end', () => {
-            out.end(() => {
+            if (settled) return;
+            stream.once('close', () => {
               if (settled) return;
-              settled = true;
               onProgress(downloaded, totalBytes);
               if (downloaded <= 0) {
-                reject(new Error('Downloaded installer file is empty'));
+                settleReject(new Error('Downloaded installer file is empty'));
                 return;
               }
               if (totalBytes && totalBytes > 0 && downloaded !== totalBytes) {
-                reject(
+                settleReject(
                   new Error(`Incomplete installer download (${downloaded}/${totalBytes} bytes)`)
                 );
                 return;
               }
-              resolve();
+              settleResolve();
             });
+            stream.end();
           });
         }
       );
 
       req.on('timeout', () => {
+        if (settled) return;
         req.destroy(new Error('Installer download timed out'));
       });
-      req.on('error', reject);
+      req.on('error', (err) => {
+        void (async () => {
+          if (settled) return;
+          settled = true;
+          this.activeAbort = null;
+          await closeOutStream('destroy');
+          reject(err instanceof Error ? err : new Error('Network error during update download'));
+        })();
+      });
       req.end();
+
+      if (this.pendingControlAction) {
+        abortHandler(this.pendingControlAction);
+      }
     });
   }
 }

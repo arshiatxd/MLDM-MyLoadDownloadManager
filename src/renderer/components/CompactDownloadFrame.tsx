@@ -92,6 +92,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
   const [selectedPartUrls, setSelectedPartUrls] = useState<string[]>([]);
   const [downloadAllParts, setDownloadAllParts] = useState(true);
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>('parallel');
+  const [batchMaxConcurrent, setBatchMaxConcurrent] = useState<number>(3);
+  const batchMaxConcurrentTouchedRef = useRef(false);
   const [dontAskAgain, setDontAskAgain] = useState(false);
   const [socialRequest, setSocialRequest] = useState<SocialDownloadRequest | null>(null);
   const [scheduleVal, setScheduleVal] = useState<ScheduleControlsValue>(() =>
@@ -119,6 +121,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
       setSettings(snap.settings);
       setDownloads(snap.downloads);
       setBatchQueueMode(snap.settings.queueMode);
+      batchMaxConcurrentTouchedRef.current = false;
+      setBatchMaxConcurrent(snap.settings.maxConcurrentDownloads);
       setAnonymousMode(Boolean(snap.settings.torrentAnonymousMode));
 
       if (!ses) {
@@ -170,7 +174,12 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
 
     const unsubs = [
       window.myload.onDownloadsUpdated((items) => setDownloads(items)),
-      window.myload.onSettingsUpdated((nextSettings) => setSettings(nextSettings)),
+      window.myload.onSettingsUpdated((nextSettings) => {
+        setSettings(nextSettings);
+        if (!batchMaxConcurrentTouchedRef.current) {
+          setBatchMaxConcurrent(nextSettings.maxConcurrentDownloads);
+        }
+      }),
     ];
 
     return () => {
@@ -355,13 +364,17 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
     if (mode !== 'confirm') return;
     const hasTallSection =
       multiPartActive || torrentFiles.length > 0 || Boolean(dirValidation && (!dirValidation.valid || dirValidation.warning));
+    const multiPartExtra = multiPartActive ? 36 : 0;
     const anonExtra = detectedKind === 'torrent' && !socialRequest ? 58 : 0;
     const scheduleExtra = settings.showScheduleInPopup
       ? scheduleVal.startMode === 'specific' || scheduleVal.stopEnabled
         ? 120
         : 92
       : 0;
-    const targetHeight = Math.min(740, (hasTallSection ? 620 : 440) + anonExtra + scheduleExtra);
+    const targetHeight = Math.min(
+      740,
+      (hasTallSection ? 620 : 440) + multiPartExtra + anonExtra + scheduleExtra
+    );
     void window.myload.resizeCurrentWindow(560, targetHeight);
   }, [
     mode,
@@ -476,7 +489,8 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             schedule,
             priority: partPriorities[part.url] ?? 'normal',
           })),
-          batchQueueMode
+          batchQueueMode,
+          batchMaxConcurrent
         );
         if (deferredStart) {
           await window.myload.closeWindow();
@@ -677,6 +691,11 @@ export function CompactDownloadFrame({ sessionId }: CompactDownloadFrameProps) {
             onDownloadAllPartsChange={setDownloadAllParts}
             queueMode={batchQueueMode}
             onQueueModeChange={setBatchQueueMode}
+            maxConcurrentDownloads={batchMaxConcurrent}
+            onMaxConcurrentDownloadsChange={(val) => {
+              batchMaxConcurrentTouchedRef.current = true;
+              setBatchMaxConcurrent(val);
+            }}
             dontAskAgain={dontAskAgain}
             onDontAskAgainChange={setDontAskAgain}
             autoModeNotice={

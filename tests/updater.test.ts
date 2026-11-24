@@ -253,5 +253,211 @@ describe('GitHub UpdateService & semver utilities', () => {
     expect(retried.state).toBe('error');
     expect(retried.error).toBe('Cancelled by user');
   });
+
+  it('supports pausing and resuming via HTTP Range without corrupting the installer file', async () => {
+    const installerPayload = crypto.randomBytes(512 * 1024);
+    const rangeHeaders: Array<string | undefined> = [];
+
+    const server = http.createServer((req, res) => {
+      const urlPath = (req.url || '/').split('?')[0];
+      if (urlPath === '/releases/latest') {
+        const host = req.headers.host;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            tag_name: 'v1.3.0',
+            name: 'MyLoad v1.3.0',
+            html_url: `http://${host}/releases/tag/v1.3.0`,
+            assets: [
+              {
+                name: 'MyLoad-Installer-1.3.0-x64.exe',
+                browser_download_url: `http://${host}/MyLoad-Installer-1.3.0-x64.exe`,
+                size: installerPayload.length,
+              },
+            ],
+          })
+        );
+        return;
+      }
+
+      if (urlPath === '/MyLoad-Installer-1.3.0-x64.exe') {
+        const range = req.headers.range;
+        rangeHeaders.push(range);
+        if (!range) {
+          res.statusCode = 200;
+          res.setHeader('Content-Length', String(installerPayload.length));
+          res.write(installerPayload.subarray(0, 160 * 1024));
+          req.on('close', () => {
+            res.destroy();
+          });
+          return;
+        }
+
+        const m = range.match(/^bytes=(\d+)-$/);
+        expect(m).not.toBeNull();
+        const start = Number(m![1]);
+        const remaining = installerPayload.subarray(start);
+        res.statusCode = 206;
+        res.setHeader(
+          'Content-Range',
+          `bytes ${start}-${installerPayload.length - 1}/${installerPayload.length}`
+        );
+        res.setHeader('Content-Length', String(remaining.length));
+        res.end(remaining);
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const updatesDir = path.join(tmpDir, 'pause-resume-updates');
+
+    let resolveFirstChunk!: () => void;
+    const firstChunkPromise = new Promise<void>((r) => {
+      resolveFirstChunk = r;
+    });
+    const launchedPaths: string[] = [];
+
+    const updater = new UpdateService({
+      currentVersion: '1.0.0',
+      downloadDir: updatesDir,
+      apiUrl: `${baseUrl}/releases/latest`,
+      fallbackReleaseUrl: `${baseUrl}/releases/latest`,
+      allowInsecureTestUrls: true,
+      onStatusChanged: (st) => {
+        if (st.state === 'downloading' && (st.downloadedBytes ?? 0) > 0) {
+          resolveFirstChunk();
+        }
+      },
+      onLaunchInstaller: (fp) => {
+        launchedPaths.push(fp);
+      },
+    });
+
+    await updater.checkForUpdates();
+    const downloadPromise = updater.downloadAndInstallUpdate();
+    await firstChunkPromise;
+
+    const pausedStatus = await updater.pauseUpdateDownload();
+    await downloadPromise;
+    expect(pausedStatus.state).toBe('paused');
+    expect(pausedStatus.downloadedBytes).toBeGreaterThan(0);
+    expect(pausedStatus.downloadedBytes).toBeLessThan(installerPayload.length);
+    const partPath = path.join(updatesDir, 'MyLoad-Installer-1.3.0-x64.exe.part');
+    expect(fs.existsSync(partPath)).toBe(true);
+    expect((await fs.promises.stat(partPath)).size).toBe(pausedStatus.downloadedBytes);
+
+    const finishedStatus = await updater.resumeUpdateDownload();
+    expect(finishedStatus.state).toBe('downloaded');
+    expect(finishedStatus.progress).toBe(100);
+    expect(rangeHeaders).toHaveLength(2);
+    expect(rangeHeaders[0]).toBeUndefined();
+    expect(rangeHeaders[1]).toBe(`bytes=${pausedStatus.downloadedBytes}-`);
+    expect(launchedPaths).toHaveLength(1);
+    const finalBytes = await fs.promises.readFile(launchedPaths[0]);
+    expect(finalBytes.equals(installerPayload)).toBe(true);
+    expect(fs.existsSync(partPath)).toBe(false);
+  });
+
+  it('cancels active or paused update downloads cleanly, deletes partial files, and returns to available', async () => {
+    const installerPayload = crypto.randomBytes(256 * 1024);
+
+    const server = http.createServer((req, res) => {
+      const urlPath = (req.url || '/').split('?')[0];
+      if (urlPath === '/releases/latest') {
+        const host = req.headers.host;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            tag_name: 'v1.4.0',
+            name: 'MyLoad v1.4.0',
+            html_url: `http://${host}/releases/tag/v1.4.0`,
+            assets: [
+              {
+                name: 'MyLoad-Installer-1.4.0-x64.exe',
+                browser_download_url: `http://${host}/MyLoad-Installer-1.4.0-x64.exe`,
+                size: installerPayload.length,
+              },
+            ],
+          })
+        );
+        return;
+      }
+
+      if (urlPath === '/MyLoad-Installer-1.4.0-x64.exe') {
+        res.statusCode = 200;
+        res.setHeader('Content-Length', String(installerPayload.length));
+        res.write(installerPayload.subarray(0, 64 * 1024));
+        req.on('close', () => {
+          res.destroy();
+        });
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const updatesDir = path.join(tmpDir, 'cancel-updates');
+    const partPath = path.join(updatesDir, 'MyLoad-Installer-1.4.0-x64.exe.part');
+
+    let notifyChunk: (() => void) | null = null;
+    const updater = new UpdateService({
+      currentVersion: '1.0.0',
+      downloadDir: updatesDir,
+      apiUrl: `${baseUrl}/releases/latest`,
+      fallbackReleaseUrl: `${baseUrl}/releases/latest`,
+      allowInsecureTestUrls: true,
+      onStatusChanged: (st) => {
+        if (st.state === 'downloading' && (st.downloadedBytes ?? 0) > 0 && notifyChunk) {
+          const cb = notifyChunk;
+          notifyChunk = null;
+          cb();
+        }
+      },
+    });
+
+    await updater.checkForUpdates();
+
+    const firstStartWait = new Promise<void>((r) => {
+      notifyChunk = r;
+    });
+    const activeDownload = updater.downloadAndInstallUpdate();
+    await firstStartWait;
+    const cancelledActive = await updater.cancelUpdateDownload();
+    await activeDownload;
+
+    expect(cancelledActive.state).toBe('available');
+    expect(cancelledActive.latestVersion).toBe('1.4.0');
+    expect(cancelledActive.downloadedBytes).toBeUndefined();
+    expect(cancelledActive.progress).toBeUndefined();
+    expect(fs.existsSync(partPath)).toBe(false);
+
+    const secondStartWait = new Promise<void>((r) => {
+      notifyChunk = r;
+    });
+    const secondDownload = updater.downloadAndInstallUpdate();
+    await secondStartWait;
+    const pausedStatus = await updater.pauseUpdateDownload();
+    await secondDownload;
+    expect(pausedStatus.state).toBe('paused');
+    expect(fs.existsSync(partPath)).toBe(true);
+
+    const cancelledPaused = await updater.cancelUpdateDownload();
+    expect(cancelledPaused.state).toBe('available');
+    expect(cancelledPaused.latestVersion).toBe('1.4.0');
+    expect(cancelledPaused.downloadedBytes).toBeUndefined();
+    expect(cancelledPaused.progress).toBeUndefined();
+    expect(fs.existsSync(partPath)).toBe(false);
+  });
 });
 

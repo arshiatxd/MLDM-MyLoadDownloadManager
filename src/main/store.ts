@@ -114,9 +114,22 @@ export class StateStore {
       const parsed = JSON.parse(raw) as Partial<PersistedState>;
       const rawSettings = parsed.settings ?? ({} as Partial<AppSettings>);
 
+      const rawConcurrency = rawSettings.maxConcurrentDownloads;
+      const rawConnections = rawSettings.httpConnections;
       const settings: AppSettings = {
         ...defaults,
         ...rawSettings,
+
+        maxConcurrentDownloads:
+          typeof rawConcurrency === 'number' && Number.isFinite(rawConcurrency)
+            ? Math.min(10, Math.max(1, Math.round(rawConcurrency)))
+            : defaults.maxConcurrentDownloads,
+        httpConnections:
+          typeof rawConnections === 'number' && Number.isFinite(rawConnections)
+            ? Math.min(32, Math.max(1, Math.round(rawConnections)))
+            : defaults.httpConnections,
+        torrentAnonymousMode: Boolean(rawSettings.torrentAnonymousMode),
+        torrentSequentialDownload: Boolean(rawSettings.torrentSequentialDownload),
 
         autoPowerAction: 'off',
         folderRoutingMode:

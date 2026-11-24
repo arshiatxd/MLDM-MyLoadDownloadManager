@@ -17,14 +17,14 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 ## Key Features
 
 - **Multi-Segment HTTP/HTTPS Engine** — Range-based concurrent connections, automatic resume, duplicate handling (`Auto-rename`, `Overwrite`, `Ask`), and per-segment speed & byte tracking.
-- **BitTorrent Support (WebTorrent)** — Download magnet links or local `.torrent` files with selective file picking inside the Inspector or Add Download modal.
+- **BitTorrent Support (WebTorrent)** — Download magnet links or local `.torrent` files with selective file picking inside the Inspector or Add Download modal, plus a dedicated **Settings → Torrents** tab with **Anonymous Download Mode**, **Seeding**, and **Sequential Download** options.
 - **Per-File-Type Download Folders** — Keep all downloads in one default folder or switch to category-specific folders (**Videos**, **Images**, **Documents**, **Archives**, **Torrents**, **Other Files**) with live disk-space validation.
 - **Compact Download Frame & Auto-Download** — Browser interceptions open a compact floating frame instead of forcing the main window open, with an optional **Auto-download on click** toggle in Preferences.
 - **Passive Clipboard Link Recognition** — Silently remembers your last copied downloadable link (`.zip`, `.rar`, `.exe`, `.mp4`, `magnet:?`, release assets, etc.) and auto-fills **Add Download** when opened manually.
-- **Multi-Part Archive Scanner** — Detects split archives (`.part01.rar`, `.001`, `.r00`, `.z01`, etc.) and asks whether to queue all parts together (with `"Don't ask again"` settings control).
-- **Flexible Batch Queues** — Queue multiple URLs or multi-part downloads in **Parallel**, **Sequential (Finish → Next)**, or **Equal Bandwidth Split** mode.
+- **Multi-Part Archive Scanner** — Detects split archives (`.part01.rar`, `.001`, `.r00`, `.z01`, etc.) and asks whether to queue all parts together with drag-and-drop/priority ordering and a **Simultaneous downloads** slider (`"Don't ask again"` configurable in Settings).
+- **Flexible Batch Queues & Concurrency Controls** — Queue multiple URLs or multi-part downloads in **Parallel**, **Sequential (Finish → Next)**, or **Equal Bandwidth Split** mode with a **Simultaneous downloads** slider (`1–10`) and a **Settings → Speed & Gaming → Threads per download** slider (`1–32`).
 - **Gaming / Surfing Mode** — Continuously monitors RTT latency jitter and balances concurrency/speed limits to prevent lag spikes during online gaming, streaming, or browsing.
-- **GitHub Update Notifier & One-Click Update** — Checks GitHub Releases for newer versions and lets you click **Update Now** to automatically download and launch the updated Windows installer.
+- **GitHub Update Notifier & One-Click Update** — Displays a symmetrical crimson update banner beneath the header toolbar when a newer GitHub Release is available, with one-click download & install plus **Pause**, **Resume** (HTTP Range), and **Cancel** transfer controls.
 - **Custom Theme Studio** — Switch between **Dark**, **Light**, or build and save your own custom palette using an interactive RGB/HSV wheel with live preview.
 - **Startup & Power Management** — Toggle Windows auto-startup in Preferences, prevent system sleep during active downloads, and arm countdown power actions (**Shut down**, **Sleep**, **Hibernate**, or **Exit**).
 - **Multilingual UI (9 Languages)** — English, Persian (RTL), Arabic (RTL), Spanish, French, German, Russian, Chinese, and Turkish, plus UI scale and Reduced Motion options.
@@ -36,7 +36,7 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 
 ### Windows Installer Wizard (Recommended)
 
-Download the latest `MyLoad-Download-Manager-Installer-1.0.141-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.141-x64.exe`) is also produced by `npm run dist`.
+Download the latest `MyLoad-Download-Manager-Installer-1.0.15-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.15-x64.exe`) is also produced by `npm run dist`.
 
 ### Browser Extension & Localhost Bridge Guide
 

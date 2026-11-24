@@ -37,7 +37,11 @@ import type {
 } from '../../shared/types';
 import { CustomSelect } from './CustomSelect';
 import { DirectoryStatusBanner } from './DirectoryStatusBanner';
-import { MultiPartPromptCard, buildQueueModeOptions } from './MultiPartPromptCard';
+import {
+  MultiPartPromptCard,
+  SimultaneousDownloadsSlider,
+  buildQueueModeOptions,
+} from './MultiPartPromptCard';
 import {
   ScheduleControlsCard,
   type ScheduleControlsValue,
@@ -61,7 +65,11 @@ interface AddDownloadModalProps {
   settings: AppSettings;
   onClose: () => void;
   onConfirm: (req: AddDownloadRequest) => Promise<void>;
-  onConfirmBatch: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) => Promise<void>;
+  onConfirmBatch: (
+    reqs: AddDownloadRequest[],
+    queueModeOverride?: QueueMode,
+    maxConcurrentOverride?: number
+  ) => Promise<void>;
   onConfirmSocial?: (req: SocialDownloadRequest) => Promise<void>;
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
 }
@@ -97,6 +105,9 @@ export function AddDownloadModal({
     'auto-rename'
   );
   const [batchQueueMode, setBatchQueueMode] = useState<QueueMode>(settings.queueMode);
+  const [batchMaxConcurrent, setBatchMaxConcurrent] = useState<number>(
+    settings.maxConcurrentDownloads
+  );
   const [scanningParts, setScanningParts] = useState(false);
   const [scanResult, setScanResult] = useState<MultiPartScanResult | null>(null);
   const [orderedParts, setOrderedParts] = useState<MultiPartCandidate[]>([]);
@@ -131,6 +142,7 @@ export function AddDownloadModal({
     setFileExistsOnDisk(false);
     setDuplicateChoice('auto-rename');
     setBatchQueueMode(settings.queueMode);
+    setBatchMaxConcurrent(settings.maxConcurrentDownloads);
     setScanningParts(false);
     setScanResult(null);
     setOrderedParts([]);
@@ -169,6 +181,7 @@ export function AddDownloadModal({
     settings.alwaysUseDefaultDir,
     settings.torrentAnonymousMode,
     settings.queueMode,
+    settings.maxConcurrentDownloads,
   ]);
 
   useEffect(() => {
@@ -493,7 +506,8 @@ export function AddDownloadModal({
             alwaysUseThisFolder: alwaysUseDir,
             schedule,
           })),
-          batchQueueMode
+          batchQueueMode,
+          batchMaxConcurrent
         );
         onClose();
         return;
@@ -518,7 +532,8 @@ export function AddDownloadModal({
             schedule,
             priority: partPriorities[part.url] ?? 'normal',
           })),
-          batchQueueMode
+          batchQueueMode,
+          batchMaxConcurrent
         );
         onClose();
         return;
@@ -666,6 +681,12 @@ export function AddDownloadModal({
                     buttonClassName="bg-[var(--bg-surface)]"
                   />
                 </div>
+                <SimultaneousDownloadsSlider
+                  id="batch-max-concurrent"
+                  queueMode={batchQueueMode}
+                  value={batchMaxConcurrent}
+                  onChange={setBatchMaxConcurrent}
+                />
               </div>
             )}
 
@@ -724,6 +745,8 @@ export function AddDownloadModal({
               onDownloadAllPartsChange={setDownloadAllParts}
               queueMode={batchQueueMode}
               onQueueModeChange={setBatchQueueMode}
+              maxConcurrentDownloads={batchMaxConcurrent}
+              onMaxConcurrentDownloadsChange={setBatchMaxConcurrent}
               dontAskAgain={dontAskAgain}
               onDontAskAgainChange={setDontAskAgain}
               autoModeNotice={

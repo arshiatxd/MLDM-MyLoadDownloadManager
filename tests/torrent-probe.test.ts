@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -15,7 +16,7 @@ import {
   saveTorrentBufferToCache,
 } from '../src/main/torrent-engine';
 import { buildTorrentTree } from '../src/shared/torrent-tree';
-import type { BrowserInterceptPayload } from '../src/shared/types';
+import type { BrowserInterceptPayload, DownloadItem } from '../src/shared/types';
 
 describe('torrent probing', () => {
   let tmpDir: string;
@@ -618,6 +619,104 @@ describe('torrent probing', () => {
           resolve();
         }
       });
+    }
+  });
+
+  it('applies rarest strategy when sequentialDownload is false and switches when sequentialDownload is enabled', async () => {
+    const payloadDir = path.join(tmpDir, 'seq-src');
+    await fs.promises.mkdir(payloadDir, { recursive: true });
+    await fs.promises.writeFile(path.join(payloadDir, 'sample.bin'), crypto.randomBytes(64 * 1024));
+
+    const torrentBuf = await new Promise<Buffer>((resolve, reject) => {
+      createTorrent(
+        payloadDir,
+        {
+          name: 'SeqCheck',
+          private: true,
+          announceList: [['http://private.tracker.invalid/announce']],
+        },
+        (err: Error | null, buf: Buffer) => {
+          if (err) reject(err);
+          else resolve(buf);
+        }
+      );
+    });
+    const torrentPath = path.join(tmpDir, 'seq-check.torrent');
+    await fs.promises.writeFile(torrentPath, torrentBuf);
+    const parsed = await probeTorrentSource(torrentPath);
+
+    const logger = new LogManager(null);
+    const engine = new TorrentDownloadEngine(logger, path.join(tmpDir, 'torrents-cache'));
+
+    const buildItem = (id: string): DownloadItem => ({
+      id,
+      kind: 'torrent',
+      source: torrentPath,
+      name: 'SeqCheck',
+      saveDir: path.join(tmpDir, `dest-${id}`),
+      filePath: path.join(tmpDir, `dest-${id}`, 'SeqCheck'),
+      category: 'torrents',
+      status: 'downloading',
+      totalBytes: parsed.totalBytes,
+      downloadedBytes: 0,
+      uploadedBytes: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      etaSeconds: null,
+      resumeSupported: true,
+      segments: [],
+      addedAt: Date.now(),
+      retryCount: 0,
+      torrent: {
+        infoHash: parsed.infoHash || '',
+        peers: 0,
+        seeds: 0,
+        ratio: 0,
+        trackers: parsed.trackers ?? [],
+        torrentFilePath: torrentPath,
+        files: parsed.files ?? [],
+      },
+    });
+
+    try {
+      await engine.start(buildItem('rarest-item'), {
+        keepSeedingAfterComplete: false,
+        sequentialDownload: false,
+        onProgress: () => {},
+        onDownloadComplete: () => {},
+        onError: () => {},
+      });
+      await new Promise((r) => setTimeout(r, 250));
+      const activeMap = (
+        engine as unknown as {
+          active: Map<string, { torrent: { strategy?: string; _rarityMap?: unknown } }>;
+        }
+      ).active;
+      const rarestTorrent = activeMap.get('rarest-item')?.torrent;
+      expect(rarestTorrent?.strategy).toBe('rarest');
+
+      engine.setSequentialDownload(true);
+      expect(rarestTorrent?.strategy).toBe('sequential');
+
+      engine.setSequentialDownload(false);
+      if (rarestTorrent?._rarityMap) {
+        expect(rarestTorrent.strategy).toBe('rarest');
+      }
+
+      await engine.pause('rarest-item');
+
+      await engine.start(buildItem('seq-item'), {
+        keepSeedingAfterComplete: false,
+        sequentialDownload: true,
+        onProgress: () => {},
+        onDownloadComplete: () => {},
+        onError: () => {},
+      });
+      await new Promise((r) => setTimeout(r, 250));
+      expect(activeMap.get('seq-item')?.torrent.strategy).toBe('sequential');
+      await engine.pause('seq-item');
+    } finally {
+      await engine.destroyAll();
     }
   });
 });

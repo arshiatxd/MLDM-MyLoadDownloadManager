@@ -4,6 +4,8 @@ import {
   CheckCircle2,
   ExternalLink,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
   ShieldCheck,
   X,
@@ -109,6 +111,12 @@ export function AboutModal({
                 <span>Downloading update ({updateStatus.progress ?? 0}%)...</span>
               </>
             )}
+            {updateStatus.state === 'paused' && (
+              <>
+                <Pause className="h-4 w-4 text-[var(--warning)]" />
+                <span>Update paused ({updateStatus.progress ?? 0}%)</span>
+              </>
+            )}
             {updateStatus.state === 'downloaded' && (
               <span className="font-semibold text-[var(--success)]">
                 v{updateStatus.latestVersion} ready to install
@@ -123,7 +131,9 @@ export function AboutModal({
           </div>
 
           <div className="flex items-center gap-1.5">
-            {(updateStatus.state === 'available' || updateStatus.state === 'downloaded') && (
+            {(updateStatus.state === 'available' ||
+              updateStatus.state === 'paused' ||
+              updateStatus.state === 'downloaded') && (
               <>
                 <button
                   type="button"
@@ -138,13 +148,24 @@ export function AboutModal({
                   onClick={onUpdateNow}
                   className="inline-flex h-7 items-center gap-1 rounded-lg bg-[var(--accent)] px-2.5 text-[11.5px] font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] cursor-pointer"
                 >
-                  <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>{updateStatus.state === 'downloaded' ? 'Install' : 'Update Now'}</span>
+                  {updateStatus.state === 'paused' ? (
+                    <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                  ) : (
+                    <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  <span>
+                    {updateStatus.state === 'downloaded'
+                      ? 'Install'
+                      : updateStatus.state === 'paused'
+                        ? 'Resume'
+                        : 'Update Now'}
+                  </span>
                 </button>
               </>
             )}
             {updateStatus.state !== 'available' &&
               updateStatus.state !== 'downloading' &&
+              updateStatus.state !== 'paused' &&
               updateStatus.state !== 'downloaded' && (
                 <button
                   type="button"

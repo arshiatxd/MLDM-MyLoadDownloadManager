@@ -230,5 +230,76 @@ describe('Multi-download queue modes', () => {
     expect(await fs.promises.readFile(path.join(tmpDir, 'one.bin'))).toEqual(fileOne);
     expect(await fs.promises.readFile(path.join(tmpDir, 'two.bin'))).toEqual(fileTwo);
   });
+
+  it('applies maxConcurrentOverride from multi-part batch immediately and clamps to 1..10', async () => {
+    const bufA = Buffer.alloc(160 * 1024, 0x41);
+    const bufB = Buffer.alloc(160 * 1024, 0x42);
+    const bufC = Buffer.alloc(160 * 1024, 0x43);
+
+    const { urlBase, server } = await startThrottledServer(
+      { '/p1.bin': bufA, '/p2.bin': bufB, '/p3.bin': bufC },
+      40,
+      16 * 1024
+    );
+    servers.push(server);
+
+    let maxObservedActive = 0;
+    const manager = new DownloadManager({
+      stateFilePath: path.join(tmpDir, 'state.json'),
+      logFilePath: null,
+      defaultDownloadDir: tmpDir,
+      enableBridge: false,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => {},
+        executeSystemAction: async () => {},
+      },
+      callbacks: {
+        onDownloadsUpdated: (items) => {
+          const active = items.filter(
+            (d) => d.status === 'downloading' || d.status === 'probing'
+          ).length;
+          if (active > maxObservedActive) maxObservedActive = active;
+        },
+        onStatsUpdated: (stats: GlobalStats) => {
+          if (stats.activeCount > maxObservedActive) maxObservedActive = stats.activeCount;
+        },
+      },
+    });
+    managers.push(manager);
+    manager.start();
+
+    manager.updateSettings({
+      maxConcurrentDownloads: 1,
+      httpConnections: 1,
+      queueMode: 'parallel',
+    });
+
+    const created = await manager.addBatchDownloads(
+      [
+        { source: `${urlBase}/p1.bin`, saveDir: tmpDir },
+        { source: `${urlBase}/p2.bin`, saveDir: tmpDir },
+        { source: `${urlBase}/p3.bin`, saveDir: tmpDir },
+      ],
+      'parallel',
+      2
+    );
+
+    expect(created).toHaveLength(3);
+    expect(manager.getSettings().maxConcurrentDownloads).toBe(2);
+    await waitForAllCompleted(manager);
+
+    expect(maxObservedActive).toBe(2);
+    expect(await fs.promises.readFile(path.join(tmpDir, 'p1.bin'))).toEqual(bufA);
+    expect(await fs.promises.readFile(path.join(tmpDir, 'p2.bin'))).toEqual(bufB);
+    expect(await fs.promises.readFile(path.join(tmpDir, 'p3.bin'))).toEqual(bufC);
+
+    await manager.addBatchDownloads(
+      [{ source: `${urlBase}/p1.bin`, saveDir: tmpDir, startPaused: true }],
+      'parallel',
+      99
+    );
+    expect(manager.getSettings().maxConcurrentDownloads).toBe(10);
+  });
 });
 

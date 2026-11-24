@@ -32,6 +32,49 @@ export function buildQueueModeOptions(lang: AppLanguage): CustomSelectOption<Que
   ];
 }
 
+export function SimultaneousDownloadsSlider({
+  id,
+  queueMode,
+  value,
+  onChange,
+}: {
+  id: string;
+  queueMode: QueueMode;
+  value: number;
+  onChange: (val: number) => void;
+}) {
+  const isSequential = queueMode === 'sequential';
+  return (
+    <div className="space-y-1 pt-0.5">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={id} className="text-[var(--text-secondary)]">
+          Simultaneous downloads
+        </label>
+        <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--text-primary)]">
+          {isSequential ? '1 (Sequential)' : value}
+        </span>
+      </div>
+      <input
+        id={id}
+        type="range"
+        min={1}
+        max={10}
+        step={1}
+        disabled={isSequential}
+        value={isSequential ? 1 : value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="Simultaneous downloads"
+        className="w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+      />
+      <div className="flex justify-between font-mono text-[10px] text-[var(--text-muted)]">
+        <span>1</span>
+        <span>5</span>
+        <span>10</span>
+      </div>
+    </div>
+  );
+}
+
 function priorityButtonClass(priority: DownloadPriority): string {
   if (priority === 'high') {
     return 'border-[var(--accent)]/60 bg-[var(--accent-soft)] text-[var(--accent-text)] font-semibold';
@@ -63,6 +106,8 @@ interface MultiPartPromptCardProps {
   onDownloadAllPartsChange: (all: boolean) => void;
   queueMode: QueueMode;
   onQueueModeChange: (mode: QueueMode) => void;
+  maxConcurrentDownloads: number;
+  onMaxConcurrentDownloadsChange: (val: number) => void;
   dontAskAgain: boolean;
   onDontAskAgainChange: (val: boolean) => void;
   autoModeNotice: boolean;
@@ -83,6 +128,8 @@ export function MultiPartPromptCard({
   onDownloadAllPartsChange,
   queueMode,
   onQueueModeChange,
+  maxConcurrentDownloads,
+  onMaxConcurrentDownloadsChange,
   dontAskAgain,
   onDontAskAgainChange,
   autoModeNotice,
@@ -346,6 +393,13 @@ export function MultiPartPromptCard({
               buttonClassName="bg-[var(--bg-surface)]"
             />
           </div>
+
+          <SimultaneousDownloadsSlider
+            id="multipart-max-concurrent"
+            queueMode={queueMode}
+            value={maxConcurrentDownloads}
+            onChange={onMaxConcurrentDownloadsChange}
+          />
         </>
       )}
 

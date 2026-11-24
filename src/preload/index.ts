@@ -37,8 +37,11 @@ const api: MyLoadApi = {
   validateDirectory: (dirPath: string, requiredBytes?: number | null) =>
     ipcRenderer.invoke('myload:validate-directory', dirPath, requiredBytes),
   addDownload: (req: AddDownloadRequest) => ipcRenderer.invoke('myload:add-download', req),
-  addBatchDownloads: (reqs: AddDownloadRequest[], queueModeOverride?: QueueMode) =>
-    ipcRenderer.invoke('myload:add-batch-downloads', reqs, queueModeOverride),
+  addBatchDownloads: (
+    reqs: AddDownloadRequest[],
+    queueModeOverride?: QueueMode,
+    maxConcurrentOverride?: number
+  ) => ipcRenderer.invoke('myload:add-batch-downloads', reqs, queueModeOverride, maxConcurrentOverride),
   addSocialDownload: (req: SocialDownloadRequest) =>
     ipcRenderer.invoke('myload:add-social-download', req),
   scanMultiParts: (
@@ -83,6 +86,9 @@ const api: MyLoadApi = {
   getUpdateStatus: () => ipcRenderer.invoke('myload:get-update-status'),
   checkForUpdates: () => ipcRenderer.invoke('myload:check-updates'),
   downloadAndInstallUpdate: () => ipcRenderer.invoke('myload:download-update'),
+  pauseUpdateDownload: () => ipcRenderer.invoke('myload:pause-update'),
+  resumeUpdateDownload: () => ipcRenderer.invoke('myload:resume-update'),
+  cancelUpdateDownload: () => ipcRenderer.invoke('myload:cancel-update'),
   openUpdateReleasePage: () => ipcRenderer.invoke('myload:open-update-page'),
   selectFolder: (defaultPath?: string) =>
     ipcRenderer.invoke('myload:select-folder', defaultPath),

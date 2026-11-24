@@ -205,40 +205,100 @@ export function SpeedSettingsTab({ settings, onUpdate }: SpeedSettingsTabProps) 
         <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
           Concurrency &amp; Connections
         </h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="flex flex-col justify-between gap-1.5">
-            <label className="whitespace-nowrap text-[var(--text-secondary)]">Max concurrent</label>
+        <div className="space-y-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/60 p-3.5">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="settings-max-concurrent"
+                className="font-medium text-[var(--text-primary)]"
+              >
+                Simultaneous downloads
+              </label>
+              <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-mono text-[11.5px] font-semibold text-[var(--text-primary)]">
+                {settings.queueMode === 'sequential'
+                  ? '1 (Sequential)'
+                  : settings.maxConcurrentDownloads}
+              </span>
+            </div>
             <input
-              type="number"
+              id="settings-max-concurrent"
+              type="range"
               min={1}
               max={10}
-              value={settings.maxConcurrentDownloads}
+              step={1}
+              disabled={settings.queueMode === 'sequential'}
+              value={
+                settings.queueMode === 'sequential' ? 1 : settings.maxConcurrentDownloads
+              }
               onChange={(e) =>
                 onUpdate({
                   maxConcurrentDownloads: Math.min(10, Math.max(1, Number(e.target.value) || 1)),
                 })
               }
-              className="ml-input h-9"
+              aria-label="Simultaneous downloads"
+              className="w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
             />
+            <div className="flex justify-between font-mono text-[11px] text-[var(--text-muted)]">
+              <span>1</span>
+              <span>5</span>
+              <span>10</span>
+            </div>
+            {settings.queueMode === 'sequential' && (
+              <p className="text-[12px] text-[var(--text-muted)]">
+                Sequential mode runs 1 file at a time.
+              </p>
+            )}
           </div>
-          <div className="flex flex-col justify-between gap-1.5">
-            <label className="whitespace-nowrap text-[var(--text-secondary)]">HTTP segments</label>
+
+          <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="settings-http-threads"
+                className="font-medium text-[var(--text-primary)]"
+              >
+                Threads per download
+              </label>
+              <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-mono text-[11.5px] font-semibold text-[var(--text-primary)]">
+                {settings.httpConnections}
+              </span>
+            </div>
             <input
-              type="number"
+              id="settings-http-threads"
+              type="range"
               min={1}
               max={32}
+              step={1}
               value={settings.httpConnections}
               onChange={(e) =>
                 onUpdate({
                   httpConnections: Math.min(32, Math.max(1, Number(e.target.value) || 1)),
                 })
               }
-              className="ml-input h-9"
+              aria-label="Threads per download"
+              className="w-full cursor-pointer accent-[var(--accent)]"
             />
+            <div className="flex justify-between font-mono text-[11px] text-[var(--text-muted)]">
+              <span>1</span>
+              <span>16</span>
+              <span>32</span>
+            </div>
+            <p className="text-[12px] text-[var(--text-secondary)]">
+              Parallel HTTP connections per file (configured in Settings only).
+              {settings.gamingModeEnabled
+                ? ' Gaming / Surfing Mode is active and dynamically caps active threads to protect latency.'
+                : ''}
+            </p>
           </div>
-          <div className="flex flex-col justify-between gap-1.5">
-            <label className="whitespace-nowrap text-[var(--text-secondary)]">Auto-retries</label>
+
+          <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <label
+              htmlFor="settings-auto-retries"
+              className="text-[var(--text-secondary)]"
+            >
+              Auto-retries on network error
+            </label>
             <input
+              id="settings-auto-retries"
               type="number"
               min={0}
               max={10}
@@ -248,15 +308,10 @@ export function SpeedSettingsTab({ settings, onUpdate }: SpeedSettingsTabProps) 
                   maxRetries: Math.min(10, Math.max(0, Number(e.target.value) || 0)),
                 })
               }
-              className="ml-input h-9"
+              className="ml-input h-8 !w-24 bg-[var(--bg-surface)]"
             />
           </div>
         </div>
-        {settings.queueMode === 'sequential' && (
-          <p className="mt-1.5 text-[12px] text-[var(--text-muted)]">
-            Sequential mode runs 1 file at a time
-          </p>
-        )}
       </section>
     </div>
   );

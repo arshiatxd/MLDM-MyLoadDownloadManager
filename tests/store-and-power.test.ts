@@ -25,10 +25,13 @@ describe('StateStore and PowerManager', () => {
 
     const settings = createDefaultSettings('C:/Downloads');
     expect(settings.httpConnections).toBe(16);
+    expect(settings.maxConcurrentDownloads).toBe(3);
+    expect(settings.torrentSequentialDownload).toBe(false);
     expect(settings.hideUpdatePrompt).toBe(false);
     settings.autoPowerAction = 'shutdown';
     settings.theme = 'light';
     settings.hideUpdatePrompt = true;
+    settings.torrentSequentialDownload = true;
     settings.filterTabOrder = ['torrents', 'all', 'images', 'docs', 'archives', 'videos', 'active', 'completed', 'other'];
 
     const item: DownloadItem = {
@@ -59,6 +62,7 @@ describe('StateStore and PowerManager', () => {
     expect(loaded.settings.autoPowerAction).toBe('off');
     expect(loaded.settings.theme).toBe('light');
     expect(loaded.settings.hideUpdatePrompt).toBe(true);
+    expect(loaded.settings.torrentSequentialDownload).toBe(true);
     expect(loaded.settings.filterTabOrder[0]).toBe('torrents');
     expect(loaded.downloads[0].status).toBe('queued');
     expect(loaded.downloads[0].downloadSpeed).toBe(0);
@@ -70,6 +74,47 @@ describe('StateStore and PowerManager', () => {
     expect(normalized[0]).toBe('videos');
     expect(normalized).toHaveLength(9);
     expect(new Set(normalized).size).toBe(9);
+  });
+
+  it('clamps maxConcurrentDownloads (1..10) and httpConnections (1..32) when loading persisted state', async () => {
+    const stateFile = path.join(tmpDir, 'clamp-state.json');
+    const defaults = createDefaultSettings('C:/Downloads');
+    await fs.promises.writeFile(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        downloads: [],
+        settings: {
+          ...defaults,
+          maxConcurrentDownloads: 50,
+          httpConnections: 99,
+        },
+      }),
+      'utf-8'
+    );
+
+    const store = new StateStore(stateFile, 'C:/Downloads');
+    const loadedHigh = store.load();
+    expect(loadedHigh.settings.maxConcurrentDownloads).toBe(10);
+    expect(loadedHigh.settings.httpConnections).toBe(32);
+
+    await fs.promises.writeFile(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        downloads: [],
+        settings: {
+          ...defaults,
+          maxConcurrentDownloads: -2,
+          httpConnections: 0,
+        },
+      }),
+      'utf-8'
+    );
+
+    const loadedLow = store.load();
+    expect(loadedLow.settings.maxConcurrentDownloads).toBe(1);
+    expect(loadedLow.settings.httpConnections).toBe(1);
   });
 
   it('manages sleep blocker and cancelable 60s countdown safely', async () => {

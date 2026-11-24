@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Accessibility,
   Gauge,
+  Magnet,
   Power,
   RotateCcw,
   Settings as SettingsIcon,
@@ -22,6 +23,7 @@ import { AppearanceSettingsTab, type ThemeSectionKey } from './settings/Appearan
 import { GeneralSettingsTab } from './settings/GeneralSettingsTab';
 import { PowerSettingsTab } from './settings/PowerSettingsTab';
 import { SpeedSettingsTab } from './settings/SpeedSettingsTab';
+import { TorrentSettingsTab } from './settings/TorrentSettingsTab';
 
 interface SettingsModalProps {
   open: boolean;
@@ -36,7 +38,7 @@ interface SettingsModalProps {
   onUpdateNow: () => void;
 }
 
-type SettingsTab = 'general' | 'speed' | 'power' | 'appearance';
+type SettingsTab = 'general' | 'speed' | 'torrents' | 'power' | 'appearance';
 
 export function SettingsModal({
   open,
@@ -215,6 +217,7 @@ export function SettingsModal({
             {[
               { id: 'general' as const, label: t(settings.language, 'generalTab'), icon: SettingsIcon },
               { id: 'speed' as const, label: t(settings.language, 'speedTab'), icon: Gauge },
+              { id: 'torrents' as const, label: t(settings.language, 'torrentsTab'), icon: Magnet },
               { id: 'power' as const, label: t(settings.language, 'powerTab'), icon: Power },
               { id: 'appearance' as const, label: t(settings.language, 'appearanceTab'), icon: Accessibility },
             ].map((item) => {
@@ -264,6 +267,7 @@ export function SettingsModal({
               />
             )}
             {tab === 'speed' && <SpeedSettingsTab settings={settings} onUpdate={onUpdate} />}
+            {tab === 'torrents' && <TorrentSettingsTab settings={settings} onUpdate={onUpdate} />}
             {tab === 'power' && <PowerSettingsTab settings={settings} onUpdate={onUpdate} />}
             {tab === 'appearance' && (
               <AppearanceSettingsTab

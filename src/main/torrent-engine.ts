@@ -157,6 +157,7 @@ function fetchRawBufferWithTimeout(
 
 export interface TorrentRunOptions {
   keepSeedingAfterComplete: boolean;
+  sequentialDownload?: boolean;
   onProgress: (patch: Partial<DownloadItem>) => void;
   onDownloadComplete: (finalPath: string, totalBytes: number, keepSeeding: boolean) => void;
   onError: (message: string) => void;
@@ -842,7 +843,7 @@ export class TorrentDownloadEngine {
       const torrent = client.add(torrentInput, {
         path: item.saveDir,
         deselect: hasPartialSelection,
-        strategy: 'sequential',
+        strategy: opts.sequentialDownload ? 'sequential' : 'rarest',
         storeCacheSlots: 96,
         uploads: 24,
         maxWebConns: anonymousMode ? 0 : 8,
@@ -996,6 +997,21 @@ export class TorrentDownloadEngine {
     const wantedSet = new Set(selectedIndices);
     entry.selectedIndices = wantedSet;
     this.applyFileSelections(entry.torrent, wantedSet);
+  }
+
+  setSequentialDownload(enabled: boolean): void {
+    for (const entry of this.active.values()) {
+      if (entry.stopping || entry.torrent.destroyed) continue;
+      const raw = entry.torrent as unknown as {
+        strategy?: string;
+        _rarityMap?: unknown;
+      };
+      if (enabled) {
+        raw.strategy = 'sequential';
+      } else if (raw._rarityMap) {
+        raw.strategy = 'rarest';
+      }
+    }
   }
 
   async pause(id: string): Promise<void> {

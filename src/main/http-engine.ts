@@ -91,6 +91,8 @@ export interface HttpRunOptions {
   maxRetries: number;
   duplicateOverride?: 'auto-rename' | 'overwrite';
   duplicatePolicy: 'auto-rename' | 'overwrite' | 'ask';
+  cacheDir?: string;
+  reservedPaths?: Set<string>;
   throttleOverride?: TokenBucket;
   onProgress: (patch: Partial<DownloadItem>) => void;
   onComplete: (finalPath: string, totalBytes: number) => void;
@@ -286,6 +288,15 @@ export class HttpDownloadEngine {
         throw new Error(initialDirCheck.error || 'Invalid download folder');
       }
 
+      const activeCacheDir = opts.cacheDir?.trim() ? path.resolve(opts.cacheDir.trim()) : null;
+      if (activeCacheDir) {
+        const cacheDirCheck = await validateSaveDirectory(activeCacheDir, item.totalBytes);
+        if (!cacheDirCheck.valid) {
+          throw new Error(cacheDirCheck.error || 'Invalid download cache folder');
+        }
+        await fs.promises.mkdir(activeCacheDir, { recursive: true });
+      }
+
       await fs.promises.mkdir(item.saveDir, { recursive: true });
 
       let targetUrl = item.source;
@@ -319,14 +330,32 @@ export class HttpDownloadEngine {
 
       const policy = opts.duplicateOverride ?? (opts.duplicatePolicy === 'ask' ? 'auto-rename' : opts.duplicatePolicy);
       const isFresh = item.downloadedBytes === 0 && item.segments.length === 0;
-      const finalPath = isFresh
-        ? await resolveTargetFilePath(item.saveDir, resolvedName, policy)
+      let finalPath = isFresh
+        ? await resolveTargetFilePath(item.saveDir, resolvedName, policy, opts.reservedPaths)
         : item.filePath;
       if (!isPathInsideDir(item.saveDir, finalPath)) {
         throw new Error('Blocked unsafe destination file path outside download folder');
       }
       const finalName = path.basename(finalPath);
-      const partPath = `${finalPath}.myload.part`;
+      const legacyPartPath = `${finalPath}.myload.part`;
+      const sanitizedId = sanitizeFileName(item.id);
+      const expectedCacheFileName = `${sanitizedId}.myload.part`;
+      const cachePartPath = activeCacheDir ? path.join(activeCacheDir, expectedCacheFileName) : null;
+      const hasValidExistingPartPath =
+        !isFresh &&
+        typeof item.partPath === 'string' &&
+        item.partPath.trim().length > 0 &&
+        fs.existsSync(item.partPath) &&
+        (path.basename(item.partPath) === expectedCacheFileName ||
+          normalizeComparablePath(item.partPath) === normalizeComparablePath(legacyPartPath));
+
+      const partPath = hasValidExistingPartPath
+        ? item.partPath!
+        : !isFresh && fs.existsSync(legacyPartPath)
+          ? legacyPartPath
+          : cachePartPath || legacyPartPath;
+
+      await fs.promises.mkdir(path.dirname(partPath), { recursive: true });
 
       let segments = cloneSegments(item.segments);
       let partExists = fs.existsSync(partPath);
@@ -347,13 +376,32 @@ export class HttpDownloadEngine {
       const initialDownloaded = segments.reduce((acc, s) => acc + s.downloaded, 0);
       const remainingRequired =
         totalBytes !== null ? Math.max(0, totalBytes - initialDownloaded) : null;
-      const spaceCheck = await validateSaveDirectory(item.saveDir, remainingRequired);
-      if (!spaceCheck.valid) {
-        throw new Error(spaceCheck.error || 'Insufficient disk space or folder is not writable');
+      const partDir = path.dirname(partPath);
+      if (normalizeComparablePath(partDir) !== normalizeComparablePath(item.saveDir)) {
+        const partSpaceCheck = await validateSaveDirectory(partDir, remainingRequired);
+        if (!partSpaceCheck.valid) {
+          throw new Error(
+            partSpaceCheck.error || 'Insufficient disk space or cache folder is not writable'
+          );
+        }
+        const sameDrive = isSameDriveRoot(partDir, item.saveDir);
+        const destSpaceCheck = await validateSaveDirectory(
+          item.saveDir,
+          sameDrive ? remainingRequired : totalBytes
+        );
+        if (!destSpaceCheck.valid) {
+          throw new Error(destSpaceCheck.error || 'Insufficient disk space or folder is not writable');
+        }
+      } else {
+        const spaceCheck = await validateSaveDirectory(item.saveDir, remainingRequired);
+        if (!spaceCheck.valid) {
+          throw new Error(spaceCheck.error || 'Insufficient disk space or folder is not writable');
+        }
       }
       opts.onProgress({
         name: finalName,
         filePath: finalPath,
+        partPath,
         category: classifyFileName(finalName, 'http'),
         status: 'downloading',
         totalBytes,
@@ -451,6 +499,15 @@ export class HttpDownloadEngine {
       await handle.close();
       handle = null;
 
+      if (policy === 'auto-rename' && fs.existsSync(finalPath)) {
+        finalPath = await resolveTargetFilePath(
+          item.saveDir,
+          finalName,
+          'auto-rename',
+          opts.reservedPaths
+        );
+      }
+
       await replaceFileWithRetries(partPath, finalPath);
 
       const finalTotal =
@@ -460,7 +517,8 @@ export class HttpDownloadEngine {
         s.status = 'done';
       }
 
-      this.logger.info('HTTP', `Completed ${finalName} (${finalTotal} bytes)`, item.id);
+      opts.onProgress({ partPath: undefined });
+      this.logger.info('HTTP', `Completed ${path.basename(finalPath)} (${finalTotal} bytes)`, item.id);
       opts.onComplete(finalPath, finalTotal);
     } catch (err) {
       if (handle) {
@@ -1022,13 +1080,17 @@ export function buildInitialSegments(
 export async function resolveTargetFilePath(
   saveDir: string,
   fileName: string,
-  policy: 'auto-rename' | 'overwrite'
+  policy: 'auto-rename' | 'overwrite',
+  reservedPaths?: Set<string>
 ): Promise<string> {
   const safeName = sanitizeFileName(fileName);
   const basePath = path.join(saveDir, safeName);
   if (policy === 'overwrite') return basePath;
 
-  const existsAny = (p: string) => fs.existsSync(p) || fs.existsSync(`${p}.myload.part`);
+  const isReserved = (p: string) =>
+    reservedPaths ? reservedPaths.has(normalizeComparablePath(p)) : false;
+  const existsAny = (p: string) =>
+    fs.existsSync(p) || fs.existsSync(`${p}.myload.part`) || isReserved(p);
   if (!existsAny(basePath)) return basePath;
 
   const ext = path.extname(safeName);
@@ -1121,17 +1183,50 @@ function cloneSegments(segments: SegmentInfo[]): SegmentInfo[] {
   return segments.map((s) => ({ ...s }));
 }
 
-async function replaceFileWithRetries(partPath: string, finalPath: string): Promise<void> {
-  if (fs.existsSync(finalPath)) {
-    await fs.promises.rm(finalPath, { force: true });
+export function normalizeComparablePath(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isSameDriveRoot(dirA: string, dirB: string): boolean {
+  const rootA = path.parse(path.resolve(dirA)).root;
+  const rootB = path.parse(path.resolve(dirB)).root;
+  return process.platform === 'win32'
+    ? rootA.toLowerCase() === rootB.toLowerCase()
+    : rootA === rootB;
+}
+
+async function renameWithRetries(srcPath: string, destPath: string): Promise<void> {
+  if (fs.existsSync(destPath)) {
+    await fs.promises.rm(destPath, { force: true });
   }
   for (let i = 0; i < 4; i++) {
     try {
-      await fs.promises.rename(partPath, finalPath);
+      await fs.promises.rename(srcPath, destPath);
       return;
     } catch (err) {
-      if (i === 3) throw err;
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === 'EXDEV' || i === 3) throw err;
       await new Promise((r) => setTimeout(r, 80 * (i + 1)));
+    }
+  }
+}
+
+async function replaceFileWithRetries(partPath: string, finalPath: string): Promise<void> {
+  await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+  try {
+    await renameWithRetries(partPath, finalPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== 'EXDEV') throw err;
+    const tempFinal = `${finalPath}.myload.moving`;
+    try {
+      await fs.promises.copyFile(partPath, tempFinal);
+      await renameWithRetries(tempFinal, finalPath);
+      await fs.promises.rm(partPath, { force: true }).catch(() => {});
+    } catch (copyErr) {
+      await fs.promises.rm(tempFinal, { force: true }).catch(() => {});
+      throw copyErr;
     }
   }
 }

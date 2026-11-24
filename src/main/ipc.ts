@@ -216,7 +216,7 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:select-folder', async (e, defaultPath?: string) => {
     const win = BrowserWindow.fromWebContents(e.sender) ?? getWindow();
     const opts: Electron.OpenDialogOptions = {
-      title: 'Select Download Folder',
+      title: 'Select Folder',
       defaultPath: defaultPath || manager.getSettings().defaultDownloadDir,
       properties: ['openDirectory', 'createDirectory'],
     };
@@ -224,6 +224,9 @@ export function registerIpcHandlers(params: {
     if (res.canceled || res.filePaths.length === 0) return null;
     return res.filePaths[0];
   });
+
+  ipcMain.handle('myload:get-default-cache-dir', () => manager.getDefaultDownloadCacheDir());
+  ipcMain.handle('myload:clear-download-cache', () => manager.clearUnusedDownloadCache());
 
   ipcMain.handle('myload:select-torrent-file', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender) ?? getWindow();
@@ -259,17 +262,26 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('myload:show-in-folder', (_e, filePath: string) => {
     if (!filePath) return;
     const resolvedTarget = path.resolve(filePath);
+    const cmpTarget =
+      process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
     const matched = manager.getDownloads().find((d) => {
-      if (!d.filePath) return false;
-      const known = path.resolve(d.filePath);
-      const cmpKnown = process.platform === 'win32' ? known.toLowerCase() : known;
-      const cmpTarget =
-        process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
-      return cmpTarget === cmpKnown || cmpTarget === `${cmpKnown}.myload.part`;
+      if (d.filePath) {
+        const known = path.resolve(d.filePath);
+        const cmpKnown = process.platform === 'win32' ? known.toLowerCase() : known;
+        if (cmpTarget === cmpKnown || cmpTarget === `${cmpKnown}.myload.part`) return true;
+      }
+      if (d.partPath) {
+        const knownPart = path.resolve(d.partPath);
+        const cmpPart = process.platform === 'win32' ? knownPart.toLowerCase() : knownPart;
+        if (cmpTarget === cmpPart) return true;
+      }
+      return false;
     });
     if (!matched) return;
     if (fs.existsSync(resolvedTarget)) {
       shell.showItemInFolder(resolvedTarget);
+    } else if (matched.partPath && fs.existsSync(matched.partPath)) {
+      shell.showItemInFolder(matched.partPath);
     } else if (fs.existsSync(`${resolvedTarget}.myload.part`)) {
       shell.showItemInFolder(`${resolvedTarget}.myload.part`);
     } else if (matched.saveDir && fs.existsSync(matched.saveDir)) {

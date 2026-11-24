@@ -678,10 +678,15 @@ describe('DownloadManager social media confirmation workflow', () => {
       outputTemplate: 'C:\\Downloads\\Sample.%(ext)s',
       ffmpegPath: null,
       limitRateBytesPerSec: null,
+      tempDir: 'C:\\Cache',
       sourceUrl: req.url,
     });
     expect(uncapped).toContain('--continue');
     expect(uncapped).not.toContain('--limit-rate');
+    const tempIdx = uncapped.indexOf('-P');
+    expect(tempIdx).toBeGreaterThan(-1);
+    expect(uncapped[tempIdx + 1]).toBe('temp:C:\\Cache');
+    expect(capped).not.toContain('-P');
     const uncappedFragIdx = uncapped.indexOf('--concurrent-fragments');
     expect(uncappedFragIdx).toBeGreaterThan(-1);
     expect(uncapped[uncappedFragIdx + 1]).toBe('8');

@@ -40,7 +40,11 @@ import type {
 } from '../shared/types';
 import { BrowserBridgeServer } from './bridge';
 import { validateSaveDirectory } from './fs-validation';
-import { HttpDownloadEngine, type ElectronNetAdapter } from './http-engine';
+import {
+  HttpDownloadEngine,
+  normalizeComparablePath,
+  type ElectronNetAdapter,
+} from './http-engine';
 import { LogManager } from './logger';
 import { scanMultiParts } from './multipart-scanner';
 import { writeActiveBridgePort } from './native-host';
@@ -119,6 +123,7 @@ export class DownloadManager {
   private readonly bridge: BrowserBridgeServer;
   private readonly callbacks: ManagerCallbacks;
   private readonly defaultDownloadDir: string;
+  private readonly defaultCacheDir: string;
   private readonly stateDir: string;
   private readonly torrentsCacheDir: string;
   private readonly enableBridge: boolean;
@@ -157,11 +162,12 @@ export class DownloadManager {
   }) {
     this.defaultDownloadDir = opts.defaultDownloadDir;
     this.stateDir = path.dirname(opts.stateFilePath);
+    this.defaultCacheDir = path.join(this.stateDir, 'cache');
     this.torrentsCacheDir = path.join(this.stateDir, 'torrents');
     this.callbacks = opts.callbacks ?? {};
     this.enableBridge = opts.enableBridge !== false;
     this.appVersion = opts.appVersion ?? '1.1.0';
-    this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir);
+    this.store = new StateStore(opts.stateFilePath, opts.defaultDownloadDir, this.defaultCacheDir);
     this.logger = new LogManager(opts.logFilePath, (entry) => {
       this.callbacks.onLogAppended?.(entry);
     });
@@ -815,7 +821,10 @@ export class DownloadManager {
 
       if (deleteFiles) {
         try {
-          await deleteDownloadFiles(item);
+          await deleteDownloadFiles(item, [
+            this.defaultCacheDir,
+            this.settings.downloadCacheDir.trim(),
+          ]);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.logger.warn('Queue', `Unable to delete files for ${item.name}: ${msg}`, id);
@@ -869,6 +878,12 @@ export class DownloadManager {
     next.httpConnections = Number.isFinite(next.httpConnections)
       ? Math.min(32, Math.max(1, Math.round(next.httpConnections)))
       : this.settings.httpConnections;
+    next.useDownloadCacheDir = Boolean(next.useDownloadCacheDir);
+    if (typeof next.downloadCacheDir === 'string') {
+      next.downloadCacheDir = next.downloadCacheDir.trim() || this.defaultCacheDir;
+    } else {
+      next.downloadCacheDir = this.defaultCacheDir;
+    }
 
     const prevSequential = this.settings.torrentSequentialDownload;
     const prevWatch = this.settings.watchClipboard;
@@ -920,8 +935,88 @@ export class DownloadManager {
   }
 
   resetSettings(): AppSettings {
-    const fresh = createDefaultSettings(this.defaultDownloadDir);
+    const fresh = createDefaultSettings(this.defaultDownloadDir, this.defaultCacheDir);
     return this.updateSettings(fresh);
+  }
+
+  getDefaultDownloadCacheDir(): string {
+    return this.defaultCacheDir;
+  }
+
+  private getEffectiveCacheDir(): string | undefined {
+    if (!this.settings.useDownloadCacheDir) return undefined;
+    return this.settings.downloadCacheDir.trim() || this.defaultCacheDir;
+  }
+
+  async clearUnusedDownloadCache(): Promise<{ removedFiles: number; freedBytes: number }> {
+    const dirsToScan = Array.from(
+      new Set(
+        [this.defaultCacheDir, this.settings.downloadCacheDir.trim()]
+          .filter((d) => Boolean(d))
+          .map((d) => path.resolve(d))
+      )
+    );
+    const protectedParts = new Set<string>();
+    let hasActiveMedia = false;
+    for (const item of this.downloads) {
+      if (item.kind === 'media' && (item.status === 'downloading' || item.status === 'probing')) {
+        hasActiveMedia = true;
+      }
+      if (item.status === 'completed') continue;
+      if (item.partPath) {
+        protectedParts.add(normalizeComparablePath(item.partPath));
+      }
+      const expectedName = `${sanitizeFileName(item.id)}.myload.part`;
+      for (const dir of dirsToScan) {
+        protectedParts.add(normalizeComparablePath(path.join(dir, expectedName)));
+      }
+    }
+
+    let removedFiles = 0;
+    let freedBytes = 0;
+
+    for (const dir of dirsToScan) {
+      if (!fs.existsSync(dir)) continue;
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const cmpFull = normalizeComparablePath(fullPath);
+        if (entry.isDirectory()) {
+          if (entry.name.startsWith('.myload-sp-') && !hasActiveMedia) {
+            const dirBytes = await measureDirectoryBytes(fullPath);
+            await fs.promises.rm(fullPath, { recursive: true, force: true }).catch(() => {});
+            removedFiles += 1;
+            freedBytes += dirBytes;
+          }
+          continue;
+        }
+        const isOrphanPart = entry.name.endsWith('.myload.part') && !protectedParts.has(cmpFull);
+        const isOrphanMoving = entry.name.endsWith('.myload.moving');
+        const isOrphanMediaPart =
+          !hasActiveMedia &&
+          !entry.name.endsWith('.myload.part') &&
+          (entry.name.endsWith('.part') || entry.name.endsWith('.ytdl'));
+        if (!isOrphanPart && !isOrphanMoving && !isOrphanMediaPart) {
+          continue;
+        }
+        try {
+          const st = await fs.promises.stat(fullPath);
+          await fs.promises.rm(fullPath, { force: true });
+          removedFiles += 1;
+          freedBytes += st.size;
+        } catch {
+        }
+      }
+    }
+
+    if (removedFiles > 0) {
+      this.logger.info(
+        'Cache',
+        `Cleared ${removedFiles} unused cache file(s) (${freedBytes} bytes)`
+      );
+    }
+
+    return { removedFiles, freedBytes };
   }
 
   getLogs(): LogEntry[] {
@@ -1037,6 +1132,13 @@ export class DownloadManager {
           ? Math.min(2, this.settings.httpConnections)
           : Math.min(4, this.settings.httpConnections)
         : this.settings.httpConnections;
+      const effectiveCacheDir = this.getEffectiveCacheDir();
+      const reservedPaths = new Set<string>();
+      for (const other of this.downloads) {
+        if (other.id !== item.id && other.status !== 'completed' && other.filePath) {
+          reservedPaths.add(normalizeComparablePath(other.filePath));
+        }
+      }
       const itemBucket = this.getOrCreateEqualBucket(item.id);
       item.status = 'probing';
       void this.httpEngine.start(item, {
@@ -1044,6 +1146,8 @@ export class DownloadManager {
         maxRetries: this.settings.maxRetries,
         duplicatePolicy: this.settings.duplicatePolicy,
         duplicateOverride,
+        cacheDir: effectiveCacheDir,
+        reservedPaths,
         throttleOverride: itemBucket,
         onProgress: (patch) => {
           Object.assign(item, patch);
@@ -1054,6 +1158,7 @@ export class DownloadManager {
         onComplete: (finalPath, totalBytes) => {
           this.releaseEqualBucket(item.id);
           item.filePath = finalPath;
+          item.partPath = undefined;
           item.name = path.basename(finalPath);
           item.category = classifyFileName(item.name, 'http');
           item.totalBytes = totalBytes;
@@ -1097,6 +1202,7 @@ export class DownloadManager {
       item.status = 'probing';
       void this.socialDownloader.executeJob(item.id, jobReq, {
         saveDir: item.saveDir,
+        cacheDir: this.getEffectiveCacheDir(),
         limitRateBytesPerSec,
         onProgress: (patch) => {
           if (
@@ -1954,11 +2060,45 @@ export class DownloadManager {
   }
 }
 
-async function deleteDownloadFiles(item: DownloadItem): Promise<void> {
+async function measureDirectoryBytes(dirPath: string): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        total += await measureDirectoryBytes(fullPath);
+      } else {
+        const st = await fs.promises.stat(fullPath).catch(() => null);
+        if (st) total += st.size;
+      }
+    }
+  } catch {
+  }
+  return total;
+}
+
+async function deleteDownloadFiles(
+  item: DownloadItem,
+  allowedCacheDirs: string[] = []
+): Promise<void> {
   const candidates = [item.filePath, `${item.filePath}.myload.part`];
   for (const target of candidates) {
     if (!target || !isPathInsideDir(item.saveDir, target)) continue;
     await fs.promises.rm(target, { recursive: true, force: true }).catch(() => {});
+  }
+  if (item.partPath) {
+    const expectedCachePart = `${sanitizeFileName(item.id)}.myload.part`;
+    const isInsideAllowedCache = allowedCacheDirs.some(
+      (dir) => Boolean(dir) && isPathInsideDir(dir, item.partPath!)
+    );
+    const isSafePartTarget =
+      isPathInsideDir(item.saveDir, item.partPath) ||
+      isInsideAllowedCache ||
+      path.basename(item.partPath) === expectedCachePart;
+    if (isSafePartTarget) {
+      await fs.promises.rm(item.partPath, { force: true }).catch(() => {});
+    }
   }
 }
 

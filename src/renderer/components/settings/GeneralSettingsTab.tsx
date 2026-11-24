@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Globe } from 'lucide-react';
-import { FILE_CATEGORIES } from '../../../shared/constants';
+import { FolderOpen, Globe, RotateCcw, Trash2 } from 'lucide-react';
+import { FILE_CATEGORIES, formatBytes } from '../../../shared/constants';
 import { LANGUAGES, t } from '../../../shared/i18n';
 import type {
   AppLanguage,
@@ -44,6 +44,10 @@ export function GeneralSettingsTab({
 }: GeneralSettingsTabProps) {
   const [dirValidation, setDirValidation] = useState<DirectoryValidationResult | null>(null);
   const [checkingDir, setCheckingDir] = useState(false);
+  const [cacheDirValidation, setCacheDirValidation] = useState<DirectoryValidationResult | null>(null);
+  const [checkingCacheDir, setCheckingCacheDir] = useState(false);
+  const [cacheClearStatus, setCacheClearStatus] = useState<string | null>(null);
+  const [clearingCache, setClearingCache] = useState(false);
 
   useEffect(() => {
     let canceled = false;
@@ -67,10 +71,71 @@ export function GeneralSettingsTab({
     };
   }, [settings.defaultDownloadDir]);
 
+  useEffect(() => {
+    if (!settings.useDownloadCacheDir) {
+      setCacheDirValidation(null);
+      setCheckingCacheDir(false);
+      return;
+    }
+    let canceled = false;
+    setCheckingCacheDir(true);
+    const timer = setTimeout(() => {
+      void window.myload
+        .validateDirectory(settings.downloadCacheDir)
+        .then((res) => {
+          if (!canceled) setCacheDirValidation(res);
+        })
+        .catch(() => {
+          if (!canceled) setCacheDirValidation(null);
+        })
+        .finally(() => {
+          if (!canceled) setCheckingCacheDir(false);
+        });
+    }, 200);
+    return () => {
+      canceled = true;
+      clearTimeout(timer);
+    };
+  }, [settings.useDownloadCacheDir, settings.downloadCacheDir]);
+
   const browseDefaultDir = async () => {
     const picked = await window.myload.selectFolder(settings.defaultDownloadDir);
     if (picked) {
       onUpdate({ defaultDownloadDir: picked });
+    }
+  };
+
+  const browseCacheDir = async () => {
+    const picked = await window.myload.selectFolder(
+      settings.downloadCacheDir || settings.defaultDownloadDir
+    );
+    if (picked) {
+      onUpdate({ downloadCacheDir: picked });
+    }
+  };
+
+  const resetCacheDir = async () => {
+    const defaultDir = await window.myload.getDefaultDownloadCacheDir();
+    if (defaultDir) {
+      onUpdate({ downloadCacheDir: defaultDir });
+    }
+  };
+
+  const handleClearCache = async () => {
+    if (clearingCache) return;
+    setClearingCache(true);
+    setCacheClearStatus(null);
+    try {
+      const res = await window.myload.clearDownloadCache();
+      setCacheClearStatus(
+        res.removedFiles === 0
+          ? 'Cache is already clean.'
+          : `Removed ${res.removedFiles} unused file${res.removedFiles === 1 ? '' : 's'} (${formatBytes(res.freedBytes)} freed).`
+      );
+    } catch {
+      setCacheClearStatus('Unable to clear cache folder.');
+    } finally {
+      setClearingCache(false);
     }
   };
 
@@ -188,6 +253,78 @@ export function GeneralSettingsTab({
             ))}
           </div>
         )}
+      </section>
+
+      <section className="border-t border-[var(--border-subtle)] pt-4">
+        <div className="mb-2">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+            Download Cache Folder
+          </h3>
+          <p className="mt-0.5 text-[12px] text-[var(--text-secondary)]">
+            Store temporary download parts here so incomplete threads do not appear in your download folder until finished.
+          </p>
+        </div>
+
+        <div className="space-y-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)]/60 p-3.5">
+          <label className="flex cursor-pointer items-center gap-2.5 text-[var(--text-primary)]">
+            <input
+              type="checkbox"
+              checked={settings.useDownloadCacheDir}
+              onChange={(e) => onUpdate({ useDownloadCacheDir: e.target.checked })}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            <span>Use temporary cache folder during downloads</span>
+          </label>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              disabled={!settings.useDownloadCacheDir}
+              value={settings.downloadCacheDir}
+              onChange={(e) => onUpdate({ downloadCacheDir: e.target.value })}
+              aria-label="Download cache folder"
+              className="ml-input h-9 flex-1 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <button
+              type="button"
+              disabled={!settings.useDownloadCacheDir}
+              onClick={() => void browseCacheDir()}
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
+              <FolderOpen className="h-4 w-4" />
+              <span>Browse</span>
+            </button>
+            <button
+              type="button"
+              disabled={!settings.useDownloadCacheDir}
+              onClick={() => void resetCacheDir()}
+              title="Reset to default MyLoad cache folder"
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Reset</span>
+            </button>
+          </div>
+
+          {settings.useDownloadCacheDir && (
+            <DirectoryStatusBanner validation={cacheDirValidation} checking={checkingCacheDir} />
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+            <button
+              type="button"
+              disabled={clearingCache}
+              onClick={() => void handleClearCache()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-[12px] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>{clearingCache ? 'Clearing…' : 'Clear unused cache'}</span>
+            </button>
+            {cacheClearStatus && (
+              <span className="text-[12px] text-[var(--text-secondary)]">{cacheClearStatus}</span>
+            )}
+          </div>
+        </div>
       </section>
 
       <section className="border-t border-[var(--border-subtle)] pt-4">

@@ -95,15 +95,17 @@ export function normalizeDownloadsOnLoad(
 export class StateStore {
   private readonly filePath: string;
   private readonly defaultDownloadDir: string;
+  private readonly defaultCacheDir: string;
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(filePath: string, defaultDownloadDir: string) {
+  constructor(filePath: string, defaultDownloadDir: string, defaultCacheDir?: string) {
     this.filePath = filePath;
     this.defaultDownloadDir = defaultDownloadDir;
+    this.defaultCacheDir = defaultCacheDir ?? path.join(path.dirname(filePath), 'cache');
   }
 
   load(): { downloads: DownloadItem[]; settings: AppSettings } {
-    const defaults = createDefaultSettings(this.defaultDownloadDir);
+    const defaults = createDefaultSettings(this.defaultDownloadDir, this.defaultCacheDir);
 
     if (!fs.existsSync(this.filePath)) {
       return { downloads: [], settings: defaults };
@@ -119,6 +121,14 @@ export class StateStore {
       const settings: AppSettings = {
         ...defaults,
         ...rawSettings,
+        useDownloadCacheDir:
+          rawSettings.useDownloadCacheDir !== undefined
+            ? Boolean(rawSettings.useDownloadCacheDir)
+            : defaults.useDownloadCacheDir,
+        downloadCacheDir:
+          typeof rawSettings.downloadCacheDir === 'string' && rawSettings.downloadCacheDir.trim().length > 0
+            ? rawSettings.downloadCacheDir.trim()
+            : defaults.downloadCacheDir,
 
         maxConcurrentDownloads:
           typeof rawConcurrency === 'number' && Number.isFinite(rawConcurrency)

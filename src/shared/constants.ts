@@ -107,12 +107,14 @@ export const POWER_ACTION_LABELS: Record<PowerAction, string> = {
   exit: 'Exit MyLoad',
 };
 
-export function createDefaultSettings(defaultDownloadDir: string): AppSettings {
+export function createDefaultSettings(defaultDownloadDir: string, defaultCacheDir = ''): AppSettings {
   return {
     defaultDownloadDir,
     alwaysUseDefaultDir: false,
     folderRoutingMode: 'single',
     categoryDownloadDirs: createDefaultCategoryDirs(),
+    useDownloadCacheDir: true,
+    downloadCacheDir: defaultCacheDir,
     showConfirmationDialog: true,
     recentDirs: defaultDownloadDir ? [defaultDownloadDir] : [],
 

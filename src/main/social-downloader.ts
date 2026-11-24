@@ -214,9 +214,10 @@ export function buildYtDlpArgs(params: {
   outputTemplate: string;
   ffmpegPath: string | null;
   limitRateBytesPerSec?: number | null;
+  tempDir?: string;
   sourceUrl: string;
 }): string[] {
-  const { req, outputTemplate, ffmpegPath, limitRateBytesPerSec, sourceUrl } = params;
+  const { req, outputTemplate, ffmpegPath, limitRateBytesPerSec, tempDir, sourceUrl } = params;
   const format: MediaOutputFormat = req.format || 'mp4';
   const isAudio = AUDIO_FORMATS.has(format);
 
@@ -231,6 +232,10 @@ export function buildYtDlpArgs(params: {
     '-o',
     outputTemplate,
   ];
+
+  if (tempDir?.trim()) {
+    args.push('-P', `temp:${tempDir.trim()}`);
+  }
 
   if (
     typeof limitRateBytesPerSec === 'number' &&
@@ -651,6 +656,7 @@ export class SocialMediaDownloader {
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      cacheDir?: string;
       limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
@@ -684,6 +690,7 @@ export class SocialMediaDownloader {
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      cacheDir?: string;
       limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
@@ -719,12 +726,17 @@ export class SocialMediaDownloader {
     const outDir = path.dirname(uniqueTarget);
     const outStem = path.basename(uniqueTarget, path.extname(uniqueTarget));
     const outputTemplate = path.join(outDir, `${outStem}.%(ext)s`);
+    const resolvedCacheDir = opts.cacheDir?.trim() ? path.resolve(opts.cacheDir.trim()) : undefined;
+    if (resolvedCacheDir) {
+      await fs.promises.mkdir(resolvedCacheDir, { recursive: true });
+    }
 
     const args = buildYtDlpArgs({
       req,
       outputTemplate,
       ffmpegPath: ffmpeg,
       limitRateBytesPerSec: opts.limitRateBytesPerSec,
+      tempDir: resolvedCacheDir,
       sourceUrl: selected?.sourceUrl || req.url,
     });
 
@@ -795,6 +807,7 @@ export class SocialMediaDownloader {
     req: SocialDownloadRequest,
     opts: {
       saveDir: string;
+      cacheDir?: string;
       limitRateBytesPerSec?: number | null;
       onProgress: (patch: Partial<DownloadItem>) => void;
       onComplete: (finalPath: string, totalBytes: number, displayName?: string) => void;
@@ -816,7 +829,9 @@ export class SocialMediaDownloader {
 
     const isSingle = tracks.length === 1 && req.bundleMode !== 'zip';
     const bundleMode = req.bundleMode === 'zip' ? 'zip' : 'individual';
-    const stageDir = path.join(opts.saveDir, `.myload-sp-${id.slice(0, 8)}-${crypto.randomBytes(2).toString('hex')}`);
+    const stageParent = opts.cacheDir?.trim() ? path.resolve(opts.cacheDir.trim()) : opts.saveDir;
+    await fs.promises.mkdir(stageParent, { recursive: true });
+    const stageDir = path.join(stageParent, `.myload-sp-${id.slice(0, 8)}-${crypto.randomBytes(2).toString('hex')}`);
     await fs.promises.mkdir(stageDir, { recursive: true });
 
     let destFolder = opts.saveDir;

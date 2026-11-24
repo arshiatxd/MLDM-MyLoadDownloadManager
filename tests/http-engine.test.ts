@@ -522,5 +522,147 @@ describe('HttpDownloadEngine', () => {
       await new Promise<void>((r) => cdnServer.close(() => r()));
     }
   });
+
+  it('stores temporary part files inside cacheDir on pause and moves completed file cleanly to saveDir', async () => {
+    chunkDelayMs = 50;
+    const throttle = new TokenBucket(null);
+    const logger = new LogManager(null);
+    const engine = new HttpDownloadEngine(throttle, logger);
+
+    const saveDir = path.join(tmpDir, 'save');
+    const cacheDir = path.join(tmpDir, 'cache');
+    await fs.promises.mkdir(saveDir, { recursive: true });
+
+    const item: DownloadItem = {
+      id: 'dl-cached-resume',
+      kind: 'http',
+      source: `${baseUrl}/artifact`,
+      name: 'cached.bin',
+      saveDir,
+      filePath: path.join(saveDir, 'cached.bin'),
+      category: 'other',
+      status: 'queued',
+      totalBytes: null,
+      downloadedBytes: 0,
+      uploadedBytes: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      etaSeconds: null,
+      resumeSupported: false,
+      segments: [],
+      addedAt: Date.now(),
+      retryCount: 0,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      let paused = false;
+      void engine.start(item, {
+        connections: 2,
+        maxRetries: 1,
+        duplicatePolicy: 'auto-rename',
+        cacheDir,
+        onProgress: (patch) => {
+          Object.assign(item, patch);
+          if (!paused && item.downloadedBytes >= 64 * 1024) {
+            paused = true;
+            engine.pause(item.id);
+            setTimeout(resolve, 80);
+          }
+        },
+        onComplete: () => reject(new Error('Expected download to pause before completing')),
+        onError: (m) => reject(new Error(m)),
+      });
+    });
+
+    const cachedPartFile = path.join(cacheDir, `${item.id}.myload.part`);
+    expect(item.partPath).toBe(cachedPartFile);
+    expect(fs.existsSync(cachedPartFile)).toBe(true);
+    expect(await fs.promises.readdir(saveDir)).toEqual([]);
+
+    chunkDelayMs = 0;
+    const finalPath = await new Promise<string>((resolve, reject) => {
+      void engine.start(item, {
+        connections: 2,
+        maxRetries: 1,
+        duplicatePolicy: 'auto-rename',
+        cacheDir,
+        onProgress: (patch) => Object.assign(item, patch),
+        onComplete: (p) => resolve(p),
+        onError: (m) => reject(new Error(m)),
+      });
+    });
+
+    expect(path.dirname(finalPath)).toBe(saveDir);
+    expect(fs.existsSync(cachedPartFile)).toBe(false);
+    expect(item.partPath).toBeUndefined();
+    expect(sha256(await fs.promises.readFile(finalPath))).toBe(payloadHash);
+    expect(await fs.promises.readdir(saveDir)).toEqual(['cached.bin']);
+  });
+
+  it('auto-renames concurrent cached downloads with matching names using reservedPaths', async () => {
+    const throttle = new TokenBucket(null);
+    const logger = new LogManager(null);
+    const engine = new HttpDownloadEngine(throttle, logger);
+
+    const saveDir = path.join(tmpDir, 'save-concurrent');
+    const cacheDir = path.join(tmpDir, 'cache-concurrent');
+    await fs.promises.mkdir(saveDir, { recursive: true });
+
+    const makeItem = (id: string): DownloadItem => ({
+      id,
+      kind: 'http',
+      source: `${baseUrl}/artifact`,
+      name: 'same-name.bin',
+      saveDir,
+      filePath: path.join(saveDir, 'same-name.bin'),
+      category: 'other',
+      status: 'queued',
+      totalBytes: null,
+      downloadedBytes: 0,
+      uploadedBytes: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      etaSeconds: null,
+      resumeSupported: false,
+      segments: [],
+      addedAt: Date.now(),
+      retryCount: 0,
+    });
+
+    const item1 = makeItem('dl-conc-1');
+    const item2 = makeItem('dl-conc-2');
+
+    const firstPath = await new Promise<string>((resolve, reject) => {
+      void engine.start(item1, {
+        connections: 2,
+        maxRetries: 0,
+        duplicatePolicy: 'auto-rename',
+        cacheDir,
+        onProgress: (p) => Object.assign(item1, p),
+        onComplete: (p) => resolve(p),
+        onError: (m) => reject(new Error(m)),
+      });
+    });
+
+    const reserved = new Set<string>([path.join(saveDir, 'same-name.bin')].map((p) =>
+      process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p)
+    ));
+    const secondPath = await new Promise<string>((resolve, reject) => {
+      void engine.start(item2, {
+        connections: 2,
+        maxRetries: 0,
+        duplicatePolicy: 'auto-rename',
+        cacheDir,
+        reservedPaths: reserved,
+        onProgress: (p) => Object.assign(item2, p),
+        onComplete: (p) => resolve(p),
+        onError: (m) => reject(new Error(m)),
+      });
+    });
+
+    expect(path.basename(firstPath)).toBe('same-name.bin');
+    expect(path.basename(secondPath)).toBe('same-name (1).bin');
+    expect(sha256(await fs.promises.readFile(secondPath))).toBe(payloadHash);
+  });
 });
 

@@ -141,6 +141,7 @@ export interface DownloadItem {
   name: string;
   saveDir: string;
   filePath: string;
+  partPath?: string;
   category: FileCategory;
   status: DownloadStatus;
   totalBytes: number | null;
@@ -229,6 +230,8 @@ export interface AppSettings {
   alwaysUseDefaultDir: boolean;
   folderRoutingMode: FolderRoutingMode;
   categoryDownloadDirs: CategoryDownloadDirs;
+  useDownloadCacheDir: boolean;
+  downloadCacheDir: string;
   showConfirmationDialog: boolean;
   showScheduleInPopup: boolean;
   recentDirs: string[];
@@ -470,6 +473,8 @@ export interface MyLoadApi {
   cancelUpdateDownload: () => Promise<UpdateStatus>;
   openUpdateReleasePage: () => Promise<void>;
   selectFolder: (defaultPath?: string) => Promise<string | null>;
+  getDefaultDownloadCacheDir: () => Promise<string>;
+  clearDownloadCache: () => Promise<{ removedFiles: number; freedBytes: number }>;
   selectTorrentFile: () => Promise<string | null>;
   openFile: (filePath: string) => Promise<string>;
   showInFolder: (filePath: string) => Promise<void>;

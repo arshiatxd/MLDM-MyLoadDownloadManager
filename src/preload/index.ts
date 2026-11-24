@@ -92,6 +92,8 @@ const api: MyLoadApi = {
   openUpdateReleasePage: () => ipcRenderer.invoke('myload:open-update-page'),
   selectFolder: (defaultPath?: string) =>
     ipcRenderer.invoke('myload:select-folder', defaultPath),
+  getDefaultDownloadCacheDir: () => ipcRenderer.invoke('myload:get-default-cache-dir'),
+  clearDownloadCache: () => ipcRenderer.invoke('myload:clear-download-cache'),
   selectTorrentFile: () => ipcRenderer.invoke('myload:select-torrent-file'),
   openFile: (filePath: string) => ipcRenderer.invoke('myload:open-file', filePath),
   showInFolder: (filePath: string) => ipcRenderer.invoke('myload:show-in-folder', filePath),

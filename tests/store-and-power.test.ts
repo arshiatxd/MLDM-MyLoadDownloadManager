@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DownloadManager } from '../src/main/download-manager';
 import { PowerManager } from '../src/main/power';
 import { StateStore, normalizeFilterTabOrder } from '../src/main/store';
 import { createDefaultSettings } from '../src/shared/constants';
@@ -28,10 +29,13 @@ describe('StateStore and PowerManager', () => {
     expect(settings.maxConcurrentDownloads).toBe(3);
     expect(settings.torrentSequentialDownload).toBe(false);
     expect(settings.hideUpdatePrompt).toBe(false);
+    expect(settings.useDownloadCacheDir).toBe(true);
     settings.autoPowerAction = 'shutdown';
     settings.theme = 'light';
     settings.hideUpdatePrompt = true;
     settings.torrentSequentialDownload = true;
+    settings.useDownloadCacheDir = false;
+    settings.downloadCacheDir = path.join(tmpDir, 'custom-cache');
     settings.filterTabOrder = ['torrents', 'all', 'images', 'docs', 'archives', 'videos', 'active', 'completed', 'other'];
 
     const item: DownloadItem = {
@@ -63,6 +67,8 @@ describe('StateStore and PowerManager', () => {
     expect(loaded.settings.theme).toBe('light');
     expect(loaded.settings.hideUpdatePrompt).toBe(true);
     expect(loaded.settings.torrentSequentialDownload).toBe(true);
+    expect(loaded.settings.useDownloadCacheDir).toBe(false);
+    expect(loaded.settings.downloadCacheDir).toBe(path.join(tmpDir, 'custom-cache'));
     expect(loaded.settings.filterTabOrder[0]).toBe('torrents');
     expect(loaded.downloads[0].status).toBe('queued');
     expect(loaded.downloads[0].downloadSpeed).toBe(0);
@@ -157,6 +163,57 @@ describe('StateStore and PowerManager', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(executeSystemAction).toHaveBeenCalledWith('exit');
     pm.dispose();
+  });
+
+  it('defaults downloadCacheDir under stateDir and cleans only orphaned cache files', async () => {
+    const stateFile = path.join(tmpDir, 'state.json');
+    const saveDir = path.join(tmpDir, 'Downloads');
+    await fs.promises.mkdir(saveDir, { recursive: true });
+
+    const manager = new DownloadManager({
+      stateFilePath: stateFile,
+      logFilePath: null,
+      defaultDownloadDir: saveDir,
+      appVersion: '1.1.0',
+      enableBridge: false,
+      powerAdapter: {
+        startSleepBlocker: () => 1,
+        stopSleepBlocker: () => undefined,
+        executeSystemAction: async () => undefined,
+      },
+    });
+
+    try {
+      const defaultCache = manager.getDefaultDownloadCacheDir();
+      expect(defaultCache).toBe(path.join(tmpDir, 'cache'));
+      expect(manager.getSettings().useDownloadCacheDir).toBe(true);
+      expect(manager.getSettings().downloadCacheDir).toBe(defaultCache);
+
+      const pausedItem = await manager.addDownload({
+        source: 'https://example.com/paused-archive.zip',
+        kind: 'http',
+        saveDir,
+        fileName: 'paused-archive.zip',
+        startPaused: true,
+      });
+
+      await fs.promises.mkdir(defaultCache, { recursive: true });
+      const protectedPart = path.join(defaultCache, `${pausedItem.id}.myload.part`);
+      const orphanPart = path.join(defaultCache, 'stale-orphan.myload.part');
+      const orphanMoving = path.join(defaultCache, 'stale.zip.myload.moving');
+      await fs.promises.writeFile(protectedPart, Buffer.alloc(128, 1));
+      await fs.promises.writeFile(orphanPart, Buffer.alloc(256, 2));
+      await fs.promises.writeFile(orphanMoving, Buffer.alloc(64, 3));
+
+      const cleared = await manager.clearUnusedDownloadCache();
+      expect(cleared.removedFiles).toBe(2);
+      expect(cleared.freedBytes).toBe(320);
+      expect(fs.existsSync(protectedPart)).toBe(true);
+      expect(fs.existsSync(orphanPart)).toBe(false);
+      expect(fs.existsSync(orphanMoving)).toBe(false);
+    } finally {
+      await manager.shutdown();
+    }
   });
 });
 

@@ -35,7 +35,7 @@ const ALLOWED_GITHUB_HOSTS = new Set([
   'uploads.github.com',
 ]);
 
-function parseSemverParts(raw: string): { core: [number, number, number]; pre: string } {
+function parseSemverParts(raw: string): { core: [number, number, number, number]; pre: string } {
   const cleaned = raw.trim().replace(/^v/i, '');
   const hyphenIdx = cleaned.indexOf('-');
   const coreStr = hyphenIdx >= 0 ? cleaned.slice(0, hyphenIdx) : cleaned;
@@ -44,8 +44,14 @@ function parseSemverParts(raw: string): { core: [number, number, number]; pre: s
     const m = part.match(/^(\d+)/);
     return m ? Number(m[1]) : 0;
   });
+  let patch = nums[2] || 0;
+  let hotfix = nums[3] || 0;
+  if (nums.length === 3 && patch >= 100 && patch < 1000) {
+    hotfix = patch % 10;
+    patch = Math.floor(patch / 10);
+  }
   return {
-    core: [nums[0] || 0, nums[1] || 0, nums[2] || 0],
+    core: [nums[0] || 0, nums[1] || 0, patch, hotfix],
     pre,
   };
 }
@@ -54,7 +60,7 @@ export function compareSemver(a: string, b: string): -1 | 0 | 1 {
   const pa = parseSemverParts(a);
   const pb = parseSemverParts(b);
 
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < 4; i += 1) {
     if (pa.core[i] > pb.core[i]) return 1;
     if (pa.core[i] < pb.core[i]) return -1;
   }

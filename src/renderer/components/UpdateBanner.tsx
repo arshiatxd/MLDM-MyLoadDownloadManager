@@ -6,7 +6,6 @@ import {
   Loader2,
   Pause,
   Play,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { formatBytes } from '../../shared/constants';
@@ -72,9 +71,7 @@ export function UpdateBanner({
             <Pause className="h-4 w-4 shrink-0 text-white/90" aria-hidden="true" />
           ) : isDownloaded ? (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-white" aria-hidden="true" />
-          ) : (
-            <Sparkles className="h-4 w-4 shrink-0 text-white" aria-hidden="true" />
-          )}
+          ) : null}
 
           <div className="min-w-0 flex-1">
             {status.state === 'available' && (

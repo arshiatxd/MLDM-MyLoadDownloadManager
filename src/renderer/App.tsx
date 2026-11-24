@@ -45,7 +45,6 @@ import { ShutdownCountdownModal } from './components/ShutdownCountdownModal';
 import { StatusBar } from './components/StatusBar';
 import { TitleBar } from './components/TitleBar';
 import { UpdateBanner } from './components/UpdateBanner';
-import { UpdatePromptModal } from './components/UpdatePromptModal';
 import { useDownloadsState } from './hooks/useDownloads';
 import { useCompletionSound } from './hooks/useSound';
 import { applyDocumentAppearance } from './utils/theme';
@@ -348,12 +347,13 @@ export function App() {
     }
   }, [announce]);
 
-  const showUpdatePrompt =
-    (updateStatus.state === 'available' ||
-      updateStatus.state === 'downloading' ||
-      updateStatus.state === 'downloaded') &&
-    !updatePromptDismissed &&
-    (!settings.hideUpdatePrompt || forceUpdatePrompt);
+  const showUpdateBanner =
+    updateStatus.state === 'downloading' ||
+    updateStatus.state === 'downloaded' ||
+    (updateStatus.state === 'available' &&
+      !updatePromptDismissed &&
+      updateStatus.latestVersion !== dismissedUpdateVersion &&
+      (!settings.hideUpdatePrompt || forceUpdatePrompt));
 
   const handleCheckForUpdates = useCallback(async () => {
     setDismissedUpdateVersion(null);
@@ -423,8 +423,7 @@ export function App() {
         privacyOpen ||
         copyrightOpen ||
         removeModal ||
-        scheduleModalItem ||
-        showUpdatePrompt
+        scheduleModalItem
       ) {
         return;
       }
@@ -504,7 +503,6 @@ export function App() {
     copyrightOpen,
     removeModal,
     scheduleModalItem,
-    showUpdatePrompt,
     visibleDownloads,
     selectedIds,
     focusedId,
@@ -721,6 +719,22 @@ export function App() {
         onQuitApp={() => void window.myload.quitApp()}
       />
 
+      {showUpdateBanner && (
+        <UpdateBanner
+          status={updateStatus}
+          onUpdateNow={() => void window.myload.downloadAndInstallUpdate()}
+          onOpenRelease={() => void window.myload.openUpdateReleasePage()}
+          onDismiss={(dontShowAgain) => {
+            setUpdatePromptDismissed(true);
+            setForceUpdatePrompt(false);
+            setDismissedUpdateVersion(updateStatus.latestVersion ?? null);
+            if (dontShowAgain) {
+              handleUpdateSettings({ hideUpdatePrompt: true });
+            }
+          }}
+        />
+      )}
+
       <FilterTabsBar
         lang={settings.language}
         order={settings.filterTabOrder}
@@ -734,18 +748,6 @@ export function App() {
       />
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {!showUpdatePrompt &&
-          (updateStatus.state === 'downloading' ||
-            updateStatus.state === 'downloaded' ||
-            (updateStatus.state === 'available' &&
-              updateStatus.latestVersion !== dismissedUpdateVersion)) && (
-          <UpdateBanner
-            status={updateStatus}
-            onUpdateNow={() => void window.myload.downloadAndInstallUpdate()}
-            onOpenRelease={() => void window.myload.openUpdateReleasePage()}
-            onDismiss={() => setDismissedUpdateVersion(updateStatus.latestVersion ?? null)}
-          />
-        )}
 
         {(() => {
           const criticalItem = downloads.find(
@@ -997,21 +999,6 @@ export function App() {
         open={copyrightOpen}
         appVersion={appVersion}
         onClose={() => setCopyrightOpen(false)}
-      />
-
-      <UpdatePromptModal
-        open={showUpdatePrompt}
-        status={updateStatus}
-        onDownloadAndInstall={() => void window.myload.downloadAndInstallUpdate()}
-        onOpenRelease={() => void window.myload.openUpdateReleasePage()}
-        onDismiss={(dontShowAgain) => {
-          setUpdatePromptDismissed(true);
-          setForceUpdatePrompt(false);
-          setDismissedUpdateVersion(updateStatus.latestVersion ?? null);
-          if (dontShowAgain) {
-            handleUpdateSettings({ hideUpdatePrompt: true });
-          }
-        }}
       />
 
       {toast && (

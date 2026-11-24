@@ -13,3 +13,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+\!android build/
+\!website/
+release/builder-debug.yml

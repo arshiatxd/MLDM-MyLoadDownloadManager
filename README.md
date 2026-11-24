@@ -36,7 +36,7 @@ An open-source, local-first desktop download manager for **HTTP/HTTPS** files an
 
 ### Windows Installer Wizard (Recommended)
 
-Download the latest `MyLoad-Download-Manager-Installer-1.0.15-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.0.15-x64.exe`) is also produced by `npm run dist`.
+Download the latest `MyLoad-Download-Manager-Installer-1.1.0-x64.exe` from the [GitHub Releases](https://github.com/arshiatxd/MLDM-MyLoadDownloadManager/releases) page and follow the setup wizard (includes an optional Desktop shortcut toggle, automatic startup configuration, and automatic browser native-host registration). A standalone portable executable (`MyLoad-Download-Manager-Portable-1.1.0-x64.exe`) is also produced by `npm run dist`.
 
 ### Browser Extension & Localhost Bridge Guide
 
@@ -53,6 +53,19 @@ MyLoad Download Manager includes a Manifest V3 Chromium extension under [`extens
 #### Troubleshooting (Manual Setup if Needed)
 - If the extension popup shows **MyLoad offline** even while MyLoad is running, verify **Settings → General & Folders → Enable local browser extension bridge** is checked and matches the port inside the extension's **Advanced bridge port** section (`49173` by default).
 - After updating extension files, click the **Reload** icon on `chrome://extensions` / `edge://extensions` so the updated extension ID (`cbnkknogojpgeikfeaploefenabcgiai`) and `nativeMessaging` permission take effect.
+
+---
+
+## Project Structure
+
+- `src/main/` — Electron main process, HTTP/BitTorrent download engines, native messaging host, local loopback bridge, power manager, and GitHub updater
+- `src/preload/` — Context-isolated IPC bridge (`window.myload`)
+- `src/renderer/` — React + Tailwind CSS desktop UI, compact confirmation/progress popups, and modular settings tabs
+- `src/shared/` — Cross-process types, constants, category/sorting helpers, and 9-language translations
+- `extension/` — Chromium Manifest V3 browser integration extension
+- `build/` — App icons, license prompt, and NSIS installer wizard script
+- `scripts/` — Electron build helpers, dev runner, after-pack hook, and icon generator
+- `tests/` — Vitest unit and integration test suites
 
 ---
 

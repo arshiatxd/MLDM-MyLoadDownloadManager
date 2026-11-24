@@ -143,7 +143,7 @@ export class UpdateService {
     onStatusChanged?: (status: UpdateStatus) => void;
     onLaunchInstaller?: (filePath: string) => Promise<void> | void;
   }) {
-    this.currentVersion = opts.currentVersion || '1.0.15';
+    this.currentVersion = opts.currentVersion || '1.1.0';
     this.downloadDir = opts.downloadDir || path.join(os.tmpdir(), 'MyLoad-Updates');
     this.apiUrl = opts.apiUrl || DEFAULT_API_URL;
     this.fallbackReleaseUrl = opts.fallbackReleaseUrl || DEFAULT_RELEASE_URL;

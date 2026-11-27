@@ -84,11 +84,37 @@ function resolveAppAsset(relativePath: string): string {
   return path.join(app.getAppPath(), relativePath);
 }
 
-function resolveExtensionDir(): string {
+function resolveBundledExtensionDir(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'extension');
   }
   return path.join(app.getAppPath(), 'extension');
+}
+
+function readManifestVersion(dir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveExtensionDir(): string {
+  const bundled = resolveBundledExtensionDir();
+  const stable = path.join(app.getPath('userData'), 'browser-extension');
+  try {
+    const bundledVersion = readManifestVersion(bundled);
+    if (!bundledVersion) return fs.existsSync(stable) ? stable : bundled;
+    if (readManifestVersion(stable) !== bundledVersion) {
+      fs.mkdirSync(stable, { recursive: true });
+      fs.cpSync(bundled, stable, { recursive: true, force: true });
+    }
+    return stable;
+  } catch {
+    return bundled;
+  }
 }
 
 function focusMainWindow(): void {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyLoad Download Manager — Browser Integration",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0QxnzSS9PozQifavVzbLFH9DQC3zrE3DhnxU658IKurUcS8yN6j8VmH4OrmNNIFMNveqs19NIWhMOjOmczJ/KNEFN98CLylkcdojKixRldTDMVzCgdEgDukq0j3B4qf9GXZ+ZO85xpH3y3SSz160mX9Dl/TGt85ITKkRqwmh0gnxtYLC2hXzJujZSMiLSBxjp5tVYdjGCJMPGSWsSG21nYREemSshvU0Zsf8qbzitBi/I34x2Kq7bJo1e0RW4t2Wei+Vw0zMnMLyKrNuAStVP/q4g9WFtur3Qz05Fo+UivAqvj745cvKccDxDGxuKUctu/AINks3xg9lE/Oh64JVrQIDAQAB",
   "description": "Automatically send browser downloads and magnet links to MyLoad Download Manager.",
   "homepage_url": "https://github.com/arshiatxd/MLDM-MyLoadDownloadManager",
